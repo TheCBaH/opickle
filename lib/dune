@@ -1,3 +1,4 @@
 (library
  (name opickle)
+ (public_name opickle)
  (libraries bytesrw))
