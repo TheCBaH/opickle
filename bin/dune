@@ -1,0 +1,5 @@
+(executable
+ (name pickle_dump)
+ (public_name pickle_dump)
+ (package opickle)
+ (libraries opickle cmdliner))

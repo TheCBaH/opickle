@@ -1,0 +1,6 @@
+[submodule "serde-pickle"]
+	path = modules/serde-pickle
+	url = https://github.com/birkenfeld/serde-pickle
+[submodule "cpython"]
+	path = modules/cpython
+	url = https://github.com/python/cpython.git

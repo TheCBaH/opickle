@@ -1,0 +1,21 @@
+{
+    "name": "npm packages",
+    "id": "npm",
+    "version": "0.0.2",
+    "description": "Install npm, global Node.js packages, and optionally Playwright",
+    "options": {
+        "packages": {
+            "type": "string",
+            "default": "",
+            "description": "Space-separated list of npm packages to install globally"
+        },
+        "playwright": {
+            "type": "boolean",
+            "default": false,
+            "description": "Install Playwright with Chromium for browser testing"
+        }
+    },
+    "installsAfter": [
+        "ghcr.io/devcontainers/features/common-utils"
+    ]
+}

@@ -1,0 +1,3 @@
+(library
+ (name opickle)
+ (libraries bytesrw))

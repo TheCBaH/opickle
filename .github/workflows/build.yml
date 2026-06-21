@@ -1,0 +1,47 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: git cache
+      uses: actions/cache@v5
+      with:
+        path: .git
+        key: git-${{ runner.os }}-${{ github.ref_name }}
+        restore-keys: |
+          git-${{ runner.os }}-
+    - name: checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+    - name: devcontainer
+      uses: ./.github/workflows/actions/devcontainer
+      id: devcontainer
+    - name: setup
+      run: |
+        echo 'EXEC=${{ steps.devcontainer.outputs.exec }}' >> $GITHUB_ENV
+    - name: build
+      run: |
+        ${{ env.EXEC }} make build BUILD_OPTIONS="--display short"
+    - name: test
+      run: |
+        ${{ env.EXEC }} make runtest
+    - name: format
+      run: |
+        ${{ env.EXEC }} make format
+    - name: verify pristine
+      run: |
+        ${{ env.EXEC }} bash -c '
+          git_status=$(git status --porcelain)
+          if [ -n "$git_status" ]; then
+            echo "Git directory is not pristine. Modified or created files:"
+            echo "$git_status"
+            exit 1
+          fi
+        '
