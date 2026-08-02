@@ -108,11 +108,21 @@ let uint2 t =
   let s = take t 2 in
   Stdlib.Bytes.get_uint16_le (Stdlib.Bytes.unsafe_of_string s) 0
 
-(* Unsigned 32-bit as an OCaml int (safe on 64-bit platforms). *)
+(* Unsigned 32-bit as an OCaml int.
+
+   NOT `land 0xFFFF_FFFF`: that literal is itself -1 wherever int is 32 bits
+   (js_of_ocaml), so the mask becomes a no-op and a word with the high bit set
+   comes back negative -- a negative length or memo index, silently. Values in
+   [2^31, 2^32) have no int representation there at all, so the honest answer is
+   to raise, exactly as uint8 does for a 64-bit length that does not fit. *)
 let uint4 t =
   let s = take t 4 in
   let b = Stdlib.Bytes.unsafe_of_string s in
-  Int32.to_int (Stdlib.Bytes.get_int32_le b 0) land 0xFFFF_FFFF
+  let v = Stdlib.Bytes.get_int32_le b 0 in
+  match Int32.unsigned_to_int v with
+  | Some n -> n
+  | None ->
+      Error.raise_at (pos t) "4-byte length %lu does not fit in a native int" v
 
 (* Signed 32-bit. *)
 let int4 t =
