@@ -14,22 +14,35 @@ module Src = Src
 module Unpickler = Unpickler
 open Bytesrw
 
-let of_reader_exn ?limits reader = Unpickler.run (Src.of_reader ?limits reader)
+type legacy_strings = Unpickler.legacy_strings = Latin1 | Raw_bytes
 
-let of_reader ?limits reader =
-  try Ok (of_reader_exn ?limits reader) with Error.E e -> Result.Error e
+let of_reader_exn ?limits ?legacy_strings ?check_frames reader =
+  Unpickler.run ?legacy_strings (Src.of_reader ?limits ?check_frames reader)
 
-let of_string_exn ?limits s = of_reader_exn ?limits (Bytes.Reader.of_string s)
-let of_string ?limits s = of_reader ?limits (Bytes.Reader.of_string s)
+let of_reader ?limits ?legacy_strings ?check_frames reader =
+  try Ok (of_reader_exn ?limits ?legacy_strings ?check_frames reader)
+  with Error.E e -> Result.Error e
 
-let of_in_channel_exn ?limits ic =
-  of_reader_exn ?limits (Bytes.Reader.of_in_channel ic)
+let of_string_exn ?limits ?legacy_strings ?check_frames s =
+  of_reader_exn ?limits ?legacy_strings ?check_frames (Bytes.Reader.of_string s)
 
-let of_in_channel ?limits ic = of_reader ?limits (Bytes.Reader.of_in_channel ic)
+let of_string ?limits ?legacy_strings ?check_frames s =
+  of_reader ?limits ?legacy_strings ?check_frames (Bytes.Reader.of_string s)
 
-let of_file_exn ?limits path =
-  try In_channel.with_open_bin path (of_in_channel_exn ?limits)
+let of_in_channel_exn ?limits ?legacy_strings ?check_frames ic =
+  of_reader_exn ?limits ?legacy_strings ?check_frames
+    (Bytes.Reader.of_in_channel ic)
+
+let of_in_channel ?limits ?legacy_strings ?check_frames ic =
+  of_reader ?limits ?legacy_strings ?check_frames
+    (Bytes.Reader.of_in_channel ic)
+
+let of_file_exn ?limits ?legacy_strings ?check_frames path =
+  try
+    In_channel.with_open_bin path
+      (of_in_channel_exn ?limits ?legacy_strings ?check_frames)
   with Sys_error msg -> Error.raise_at ~kind:Input 0L "%s" msg
 
-let of_file ?limits path =
-  try Ok (of_file_exn ?limits path) with Error.E e -> Result.Error e
+let of_file ?limits ?legacy_strings ?check_frames path =
+  try Ok (of_file_exn ?limits ?legacy_strings ?check_frames path)
+  with Error.E e -> Result.Error e

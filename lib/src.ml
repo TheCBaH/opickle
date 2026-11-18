@@ -15,10 +15,12 @@ type t = {
   mutable len : int;  (** index past the last valid byte in [buf] *)
   mutable pos : int64;
   mutable unread_budget : int64;
+  mutable frame_remaining : int64 option;
+  check_frames : bool;
   limits : Limits.t;
 }
 
-let of_reader ?(limits = Limits.unlimited) reader =
+let of_reader ?(limits = Limits.unlimited) ?(check_frames = true) reader =
   Limits.validate limits;
   {
     reader;
@@ -27,14 +29,29 @@ let of_reader ?(limits = Limits.unlimited) reader =
     len = 0;
     pos = Int64.of_int (Bytes.Reader.pos reader);
     unread_budget = limits.input_bytes;
+    frame_remaining = None;
+    check_frames;
     limits;
   }
 
 let pos t = t.pos
 let limits t = t.limits
 
+let start_opcode t =
+  if t.frame_remaining = Some 0L then t.frame_remaining <- None
+
+let require_frame_boundary t label =
+  match t.frame_remaining with
+  | Some n when n > 0L ->
+      Error.raise_at t.pos "%s before the end of the current frame" label
+  | _ -> ()
+
 let check_input t n =
   let n = Int64.of_int n in
+  (match t.frame_remaining with
+  | Some remaining when n > remaining ->
+      Error.raise_at t.pos "operand crosses a frame boundary"
+  | _ -> ());
   if n > t.unread_budget then
     Error.raise_at ~kind:Limit t.pos "input byte limit exceeded";
   if t.pos > Int64.sub Int64.max_int n then
@@ -45,7 +62,10 @@ let advance t n =
   t.off <- t.off + n;
   let n = Int64.of_int n in
   t.pos <- Int64.add t.pos n;
-  t.unread_budget <- Int64.sub t.unread_budget n
+  t.unread_budget <- Int64.sub t.unread_budget n;
+  match t.frame_remaining with
+  | Some remaining -> t.frame_remaining <- Some (Int64.sub remaining n)
+  | None -> ()
 
 (* Pull the next non-empty slice into the buffer.  Returns [false] at end of
    data. *)
@@ -118,8 +138,11 @@ let line t =
         "unexpected end of input: missing newline";
     let can_read = available t in
     let remaining = limit - Buffer.length b in
+    let budget = Int64.min (Int64.of_int can_read) t.unread_budget in
     let budget =
-      Int64.of_int can_read |> Int64.min t.unread_budget |> Int64.to_int
+      match t.frame_remaining with
+      | None -> Int64.to_int budget
+      | Some n -> Int64.to_int (Int64.min budget n)
     in
     let scan_len = if remaining < budget then remaining + 1 else budget in
     let eol =
@@ -137,10 +160,14 @@ let line t =
         advance t (n + 1);
         Buffer.contents b
     | None ->
-        if scan_len > remaining then
-          Error.raise_at ~kind:Limit t.pos "line byte limit exceeded";
-        if scan_len < can_read then
-          Error.raise_at ~kind:Limit t.pos "input byte limit exceeded";
+        if scan_len > remaining then begin
+          advance t remaining;
+          Error.raise_at ~kind:Limit t.pos "line byte limit exceeded"
+        end;
+        if scan_len < can_read then begin
+          advance t scan_len;
+          check_input t 1
+        end;
         check_input t scan_len;
         Buffer.add_subbytes b t.buf t.off scan_len;
         advance t scan_len;
@@ -172,10 +199,28 @@ let uint4 t =
   | None ->
       Error.raise_at (pos t) "4-byte length %lu does not fit in a native int" v
 
-(* Signed 32-bit. *)
-let int4 t =
+let int32 t =
   let s = take t 4 in
-  Int32.to_int (Stdlib.Bytes.get_int32_le (Stdlib.Bytes.unsafe_of_string s) 0)
+  String.get_int32_le s 0
+
+let int4 t = Int32.to_int (int32 t)
+let uint32 t = Int64.logand (Int64.of_int32 (int32 t)) 0xFFFF_FFFFL
+
+let length32 t =
+  let n = int32 t in
+  match Int32.unsigned_to_int n with
+  | _ when n < 0l -> Error.raise_at (pos t) "negative operand length"
+  | Some n -> n
+  | None -> Error.raise_at ~kind:Limit (pos t) "operand exceeds platform size"
+
+let frame t =
+  (* A FRAME header starts outside the preceding frame. *)
+  (match t.frame_remaining with
+  | None -> ()
+  | Some _ -> Error.raise_at t.pos "FRAME inside a frame");
+  let n = String.get_int64_le (take t 8) 0 in
+  if n < 0L then Error.raise_at t.pos "frame length is out of range";
+  if t.check_frames then t.frame_remaining <- Some n
 
 (* Unsigned 64-bit length as an OCaml int; raises if it does not fit. *)
 let uint8 t =

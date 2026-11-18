@@ -19,6 +19,7 @@ type t =
   | Float of float
   | Bytes of string
   | Bytearray of string
+  | Readonly_buffer of t
   | Str of string  (** unicode text, stored as UTF-8 *)
   | List of t list ref
   | Tuple of t array
@@ -29,7 +30,7 @@ type t =
   | Reduce of { func : t; args : t }
   | Object of { cls : t; args : t; mutable state : t option }
   | Persistent of t
-  | Ext of int
+  | Ext of int32
 
 (* ── Big-integer decimal rendering ──────────────────────────────────────── *)
 
@@ -138,6 +139,7 @@ let pp ppf root =
     | Float f -> Format.pp_print_string ppf (float_repr f)
     | Bytes s -> Format.fprintf ppf "b%s" (quote_bytes s)
     | Bytearray s -> Format.fprintf ppf "bytearray(b%s)" (quote_bytes s)
+    | Readonly_buffer v -> Format.fprintf ppf "<readonly buffer %a>" (go seen) v
     | Str s -> Format.pp_print_string ppf (quote_str s)
     | Tuple a ->
         let sep = if Array.length a = 1 then "," else "" in
@@ -159,7 +161,7 @@ let pp ppf root =
         Format.fprintf ppf "@[%,<object %a@ %a%a>@]" (go seen) cls (go seen)
           args (opt_state seen) state
     | Persistent id -> Format.fprintf ppf "@[%,<persid %a>@]" (go seen) id
-    | Ext code -> Format.fprintf ppf "<ext %d>" code
+    | Ext code -> Format.fprintf ppf "<ext %ld>" code
   and elems seen ppf items =
     Format.pp_print_list ~pp_sep:comma (go seen) ppf items
   and pairs seen ppf items =
