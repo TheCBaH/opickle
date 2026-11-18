@@ -3,7 +3,8 @@ module E = Opickle.Error
 module B = Bytesrw.Bytes
 module C = Conformance_vectors
 
-let rec project : V.t -> C.value = function
+let rec project value : C.value =
+  match V.view value with
   | V.None -> Null
   | V.Bool b -> Bool b
   | V.Int n -> Int n
@@ -13,31 +14,30 @@ let rec project : V.t -> C.value = function
   | V.Bytearray b -> Bytearray b
   | V.Readonly_buffer value -> Readonly_buffer (project value)
   | V.Str s -> Text s
-  | V.List r -> List (List.map project !r)
+  | V.List items -> List (List.map project items)
   | V.Tuple a -> Tuple (List.map project (Array.to_list a))
-  | V.Dict r -> Dict (List.map (fun (k, v) -> (project k, project v)) !r)
-  | V.Set r -> Set (List.sort compare (List.map project !r))
+  | V.Dict entries ->
+      Dict (List.map (fun (k, v) -> (project k, project v)) entries)
+  | V.Set items -> Set (List.sort compare (List.map project items))
   | V.Frozenset l -> Frozenset (List.sort compare (List.map project l))
   | V.Global { modul; name } -> Global (modul, name)
-  | V.Reduce { func; args } -> Reduce (project func, project args)
-  | V.Object { cls; args; state } ->
-      Object (project cls, project args, Option.map project state)
+  | V.Object { constructor; operations } ->
+      Object
+        (project_constructor constructor, List.map project_operation operations)
   | V.Persistent id -> Persistent (project id)
   | V.Ext code -> Extension code
 
-let reused_reader slice_length data =
-  let first = 2 in
-  let backing = Bytes.create (slice_length + first + 1) in
-  let pos = ref 0 in
-  B.Reader.make ~slice_length (fun () ->
-      let length = min slice_length (String.length data - !pos) in
-      if length = 0 then B.Slice.eod
-      else begin
-        Bytes.fill backing 0 (Bytes.length backing) '\xFF';
-        Bytes.blit_string data !pos backing first length;
-        pos := !pos + length;
-        B.Slice.make backing ~first ~length
-      end)
+and project_constructor : V.constructor -> C.constructor = function
+  | V.Reduce { func; args } -> Reduce (project func, project args)
+  | V.New { cls; args; kwargs } ->
+      New (project cls, project args, Option.map project kwargs)
+  | V.Legacy_instantiate { cls; args } -> Legacy (project cls, project args)
+
+and project_operation : V.operation -> C.operation = function
+  | V.Append value -> Append (project value)
+  | V.Set_item (key, value) -> Set_item (project key, project value)
+  | V.Add_item value -> Add_item (project value)
+  | V.Build state -> Build (project state)
 
 let for_readers data f =
   f "single slice" (B.Reader.of_string ~slice_length:(String.length data) data);
@@ -48,7 +48,7 @@ let for_readers data f =
         (B.Reader.of_string ~slice_length data);
       f
         (Printf.sprintf "reused slice %d" slice_length)
-        (reused_reader slice_length data))
+        (Test_reader.reused slice_length data))
     [ 1; 2; 3; 7 ]
 
 let failure name reader data detail =
@@ -98,7 +98,7 @@ let%test_unit "every proper prefix of a supported vector is truncated" =
       | C.Value _ ->
           for cut = 0 to String.length data - 1 do
             let prefix = String.sub data 0 cut in
-            let reader = reused_reader 3 prefix in
+            let reader = Test_reader.reused 3 prefix in
             match Opickle.of_reader reader with
             | Error { E.kind = Truncated; pos; _ } when pos = Int64.of_int cut
               ->
@@ -110,6 +110,53 @@ let%test_unit "every proper prefix of a supported vector is truncated" =
                   "prefix decoded successfully"
           done)
     C.cases
+
+let%test_unit "bounded edits of generated values stay inside the result API" =
+  let rng = Random.State.make [| C.seed; 77 |] in
+  let limits : Opickle.Limits.t =
+    {
+      input_bytes = 512L;
+      payload_bytes = 128;
+      line_bytes = 128;
+      text_digits = 64;
+      marks = 32;
+      stack_items = 128;
+      memo_entries = 128;
+      opcodes = 128;
+      work = 1024;
+    }
+  in
+  List.iter
+    (fun (name, original, _) ->
+      for sample = 1 to 6 do
+        let index = Random.State.int rng (String.length original) in
+        let edited =
+          if Random.State.bool rng then
+            String.sub original 0 index
+            ^ String.sub original (index + 1)
+                (String.length original - index - 1)
+          else
+            let bytes = Bytes.of_string original in
+            Bytes.set bytes index (Char.chr (Random.State.int rng 128));
+            Bytes.unsafe_to_string bytes
+        in
+        let name = Printf.sprintf "%s mutation %d" name sample in
+        let input_end = Int64.of_int (String.length edited) in
+        let reader = Test_reader.reused 3 edited in
+        match Opickle.of_reader ~limits reader with
+        | Ok _ -> ()
+        | Error error
+          when error.pos >= 0L && error.pos <= input_end
+               && Option.fold ~none:true
+                    ~some:(fun pos -> pos >= 0L && pos <= error.pos)
+                    error.opcode_pos ->
+            ()
+        | Error error ->
+            failure name "bounded mutation" edited (E.to_string error)
+        | exception exn ->
+            failure name "bounded mutation" edited (Printexc.to_string exn)
+      done)
+    C.random_cases
 
 let%test_unit "malformed stack and memo operations report instruction offsets" =
   List.iter
@@ -171,20 +218,38 @@ let%test_unit "legacy strings can preserve bytes without affecting Unicode" =
       | Error err ->
           failure "legacy string policy" reader data (E.to_string err))
 
+let same_node left right = V.same_node left right && V.id left = V.id right
+
+let check_graph name value =
+  match (name, V.view value) with
+  | "shared-list", V.List [ first; second ] -> same_node first second
+  | "recursive-list", V.List [ child ] -> same_node child value
+  | "self-state", V.Object { operations = [ V.Build child ]; _ } ->
+      same_node child value
+  | "reduce-build-alias", V.List [ first; second ] when same_node first second
+    ->
+      begin match V.view first with
+      | V.Object { constructor = V.Reduce _; operations = [ V.Build state ] } ->
+          project state = C.Dict [ (C.Text "attr", C.Int 5L) ]
+      | _ -> false
+      end
+  | _ -> false
+
 let%test_unit "memoized values retain identity through reader refills" =
   List.iter
     (fun (name, data) ->
       for_readers data (fun reader source ->
-          match (name, Opickle.of_reader source) with
-          | "shared-list", Ok (V.List { contents = [ first; second ] })
-            when first == second ->
-              ()
-          | "recursive-list", Ok (V.List { contents = [ child ] } as parent)
-            when child == parent ->
-              ()
-          | "self-state", Ok (V.Object { state = Some child; _ } as parent)
-            when child == parent ->
-              ()
-          | _, Ok _ -> failure name reader data "memo identity was lost"
-          | _, Error err -> failure name reader data (E.to_string err)))
+          match Opickle.of_reader source with
+          | Ok value when check_graph name value -> ()
+          | Ok _ -> failure name reader data "memo identity or state was lost"
+          | Error err -> failure name reader data (E.to_string err)))
     C.graph_cases
+
+let%test_unit "string dictionary lookup uses the most recent entry" =
+  let _, data, _ =
+    List.find (fun (name, _, _) -> name = "repeated-dict-key") C.cases
+  in
+  let value = Opickle.of_string_exn data in
+  match V.dict_find "a" value with
+  | Some found when V.as_int found = Some 8L -> ()
+  | _ -> failure "repeated-dict-key" "string" data "expected the last value"

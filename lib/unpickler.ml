@@ -297,6 +297,7 @@ type t = {
   mutable work : int;
   memo : (int64, Value.t) Hashtbl.t;
   legacy_strings : legacy_strings;
+  strict_stack : bool;
 }
 
 exception Stop
@@ -315,6 +316,13 @@ let push m v =
   m.stack <- v :: m.stack;
   m.stack_len <- m.stack_len + 1;
   m.live_items <- m.live_items + 1
+
+let emit m value =
+  let node =
+    try Value.make value
+    with Value.Container_limit -> limited m "container item"
+  in
+  push m node
 
 let pop m =
   match m.stack with
@@ -349,6 +357,7 @@ let drop_mark m =
    stack saved by that MARK. *)
 let pop_mark m =
   let items = m.stack in
+  if m.stack_len > Sys.max_array_length then limited m "container item";
   charge m m.stack_len;
   drop_mark m;
   List.rev items
@@ -374,22 +383,15 @@ let to_pairs m items =
   in
   loop [] items
 
-let extend m target items =
-  let rec reverse acc = function
-    | x :: rest ->
-        charge m 1;
-        reverse (x :: acc) rest
-    | [] -> List.rev_append acc items
-  in
-  target := reverse [] !target
-
 let decimal m s =
   let s = String.trim s in
   charge m (String.length s);
   if String.length s > 0 then begin
     let sign = if s.[0] = '-' || s.[0] = '+' then 1 else 0 in
-    if String.length s - sign > (Src.limits m.src).text_digits then
-      limited m "decimal digit"
+    if
+      String.length s - sign
+      > min Sys.max_array_length (Src.limits m.src).text_digits
+    then limited m "decimal digit"
   end;
   value_of_decimal ~charge:(charge m)
     ~fail:(fun () -> err m "invalid decimal integer")
@@ -448,25 +450,23 @@ let ascii m label s =
     err m "%s requires ASCII" label;
   s
 
-let tuple_args m label = function
-  | Tuple _ as args -> args
-  | _ -> err m "%s expects tuple arguments" label
+let tuple_args m label args =
+  if not (Value.is_tuple args) then err m "%s expects tuple arguments" label;
+  args
 
 let extension m code =
   if code <= 0l then err m "extension code must be positive";
-  push m (Ext code)
+  emit m (Ext code)
 
-let expect_list m = function
-  | List r -> r
-  | _ -> err m "APPEND(S) target is not a list"
+let mutate m label target operation =
+  charge m 1;
+  let accepted =
+    try Value.apply target operation
+    with Value.Container_limit -> limited m "container item"
+  in
+  if not accepted then err m "%s does not accept this target" label
 
-let expect_dict m = function
-  | Dict r -> r
-  | _ -> err m "SETITEM(S) target is not a dict"
-
-let expect_set m = function
-  | Set r -> r
-  | _ -> err m "ADDITEMS target is not a set"
+let instance m constructor = emit m (Object { constructor; operations = [] })
 
 let run_op m op =
   let s = m.src in
@@ -481,16 +481,18 @@ let run_op m op =
   else if c = Opcode.stop then begin
     Src.require_frame_boundary s "STOP";
     ignore (top m);
+    if m.strict_stack && (m.stack_len <> 1 || m.marks <> 0) then
+      err m "STOP expects one value and no open marks";
     raise Stop
   end (* integers / bool / none *)
-  else if c = Opcode.none then push m None
-  else if c = Opcode.newtrue then push m (Bool true)
-  else if c = Opcode.newfalse then push m (Bool false)
+  else if c = Opcode.none then emit m None
+  else if c = Opcode.newtrue then emit m (Bool true)
+  else if c = Opcode.newfalse then emit m (Bool false)
   else if c = Opcode.int then
     begin match Src.line s with
-    | "00" -> push m (Bool false)
-    | "01" -> push m (Bool true)
-    | l -> push m (decimal m l)
+    | "00" -> emit m (Bool false)
+    | "01" -> emit m (Bool true)
+    | l -> emit m (decimal m l)
     end
   else if c = Opcode.long then begin
     let l = String.trim (Src.line s) in
@@ -499,99 +501,97 @@ let run_op m op =
         String.sub l 0 (String.length l - 1)
       else l
     in
-    push m (decimal m l)
+    emit m (decimal m l)
   end
-  else if c = Opcode.binint then push m (Int (Int64.of_int32 (Src.int32 s)))
-  else if c = Opcode.binint1 then push m (Int (Int64.of_int (Src.uint1 s)))
-  else if c = Opcode.binint2 then push m (Int (Int64.of_int (Src.uint2 s)))
+  else if c = Opcode.binint then emit m (Int (Int64.of_int32 (Src.int32 s)))
+  else if c = Opcode.binint1 then emit m (Int (Int64.of_int (Src.uint1 s)))
+  else if c = Opcode.binint2 then emit m (Int (Int64.of_int (Src.uint2 s)))
   else if c = Opcode.long1 then
-    push m (value_of_long_bytes (Src.payload s (Src.uint1 s)))
+    emit m (value_of_long_bytes (Src.payload s (Src.uint1 s)))
   else if c = Opcode.long4 then
-    push m (value_of_long_bytes (Src.payload s (Src.length32 s))) (* floats *)
-  else if c = Opcode.float then push m (Float (text_float m (Src.line s)))
-  else if c = Opcode.binfloat then push m (Float (Src.float8_be s)) (* bytes *)
-  else if c = Opcode.binbytes then push m (Bytes (Src.payload s (Src.uint4 s)))
+    emit m (value_of_long_bytes (Src.payload s (Src.length32 s))) (* floats *)
+  else if c = Opcode.float then emit m (Float (text_float m (Src.line s)))
+  else if c = Opcode.binfloat then emit m (Float (Src.float8_be s)) (* bytes *)
+  else if c = Opcode.binbytes then emit m (Bytes (Src.payload s (Src.uint4 s)))
   else if c = Opcode.short_binbytes then
-    push m (Bytes (Src.payload s (Src.uint1 s)))
-  else if c = Opcode.binbytes8 then push m (Bytes (Src.payload s (Src.uint8 s)))
+    emit m (Bytes (Src.payload s (Src.uint1 s)))
+  else if c = Opcode.binbytes8 then emit m (Bytes (Src.payload s (Src.uint8 s)))
   else if c = Opcode.bytearray8 then
-    push m (Bytearray (Src.payload s (Src.uint8 s))) (* strings (py2 str) *)
+    emit m (Bytearray (Src.payload s (Src.uint8 s))) (* strings (py2 str) *)
   else if c = Opcode.string then begin
     let body = strip_quotes ~fail:(fun msg -> err m "%s" msg) (Src.line s) in
     let raw = escape_decode ~fail:(fun msg -> err m "%s" msg) body in
-    push m (legacy_string m raw)
+    emit m (legacy_string m raw)
   end
   else if c = Opcode.binstring then
-    push m (legacy_string m (Src.payload s (Src.length32 s)))
+    emit m (legacy_string m (Src.payload s (Src.length32 s)))
   else if c = Opcode.short_binstring then
-    push m (legacy_string m (Src.payload s (Src.uint1 s))) (* unicode *)
+    emit m (legacy_string m (Src.payload s (Src.uint1 s))) (* unicode *)
   else if c = Opcode.unicode then
-    push m
+    emit m
       (Str (raw_unicode_escape ~fail:(fun msg -> err m "%s" msg) (Src.line s)))
   else if c = Opcode.short_binunicode then
-    push m (unicode m (Src.payload s (Src.uint1 s)))
+    emit m (unicode m (Src.payload s (Src.uint1 s)))
   else if c = Opcode.binunicode then
-    push m (unicode m (Src.payload s (Src.uint4 s)))
+    emit m (unicode m (Src.payload s (Src.uint4 s)))
   else if c = Opcode.binunicode8 then
-    push m (unicode m (Src.payload s (Src.uint8 s)))
+    emit m (unicode m (Src.payload s (Src.uint8 s)))
     (* buffers (proto 5, out-of-band) *)
   else if c = Opcode.next_buffer then
     Error.raise_at ~kind:Unsupported (Src.pos s)
       "NEXT_BUFFER: out-of-band buffers are not supported"
   else if c = Opcode.readonly_buffer then
-    begin match top m with
-    | Bytes _ | Readonly_buffer _ -> ()
-    | Bytearray _ as value ->
-        ignore (pop m);
-        push m (Readonly_buffer value)
+    begin match (top m).shape with
+    | Scalar (Bytes _ | Readonly_buffer _) -> ()
+    | Scalar (Bytearray _) ->
+        let value = pop m in
+        emit m (Readonly_buffer value)
     | _ -> err m "READONLY_BUFFER expects a buffer"
     end (* lists *)
-  else if c = Opcode.empty_list then push m (List (ref []))
-  else if c = Opcode.list then push m (List (ref (pop_mark m)))
+  else if c = Opcode.empty_list then emit m (List [])
+  else if c = Opcode.list then emit m (List (pop_mark m))
   else if c = Opcode.append then begin
     let x = pop m in
-    let r = expect_list m (top m) in
-    extend m r [ x ]
+    mutate m "APPEND" (top m) (Append x)
   end
   else if c = Opcode.appends then begin
     let items = pop_mark m in
-    let r = expect_list m (top m) in
-    extend m r items
+    let target = top m in
+    List.iter (fun item -> mutate m "APPENDS" target (Append item)) items
   end (* tuples *)
-  else if c = Opcode.empty_tuple then push m (Tuple [||])
-  else if c = Opcode.tuple then push m (Tuple (Array.of_list (pop_mark m)))
+  else if c = Opcode.empty_tuple then emit m (Tuple [||])
+  else if c = Opcode.tuple then emit m (Tuple (Array.of_list (pop_mark m)))
   else if c = Opcode.tuple1 then
     let a = pop m in
-    push m (Tuple [| a |])
+    emit m (Tuple [| a |])
   else if c = Opcode.tuple2 then
     let b = pop m in
     let a = pop m in
-    push m (Tuple [| a; b |])
+    emit m (Tuple [| a; b |])
   else if c = Opcode.tuple3 then
     let cc = pop m in
     let b = pop m in
     let a = pop m in
-    push m (Tuple [| a; b; cc |]) (* dicts *)
-  else if c = Opcode.empty_dict then push m (Dict (ref []))
-  else if c = Opcode.dict then push m (Dict (ref (to_pairs m (pop_mark m))))
+    emit m (Tuple [| a; b; cc |]) (* dicts *)
+  else if c = Opcode.empty_dict then emit m (Dict [])
+  else if c = Opcode.dict then emit m (Dict (to_pairs m (pop_mark m)))
   else if c = Opcode.setitem then begin
     let v = pop m in
     let k = pop m in
-    let r = expect_dict m (top m) in
-    extend m r [ (k, v) ]
+    mutate m "SETITEM" (top m) (Set_item (k, v))
   end
   else if c = Opcode.setitems then begin
     let pairs = to_pairs m (pop_mark m) in
-    let r = expect_dict m (top m) in
-    extend m r pairs
+    let target = top m in
+    List.iter (fun (k, v) -> mutate m "SETITEMS" target (Set_item (k, v))) pairs
   end (* sets *)
-  else if c = Opcode.empty_set then push m (Set (ref []))
+  else if c = Opcode.empty_set then emit m (Set [])
   else if c = Opcode.additems then begin
     let items = pop_mark m in
-    let r = expect_set m (top m) in
-    extend m r items
+    let target = top m in
+    List.iter (fun item -> mutate m "ADDITEMS" target (Add_item item)) items
   end
-  else if c = Opcode.frozenset then push m (Frozenset (pop_mark m))
+  else if c = Opcode.frozenset then emit m (Frozenset (pop_mark m))
     (* stack ops *)
   else if c = Opcode.pop then
     match m.stack with [] -> drop_mark m | _ -> ignore (pop m)
@@ -616,73 +616,62 @@ let run_op m op =
     let name = Src.line s in
     if not (String.is_valid_utf_8 modul && String.is_valid_utf_8 name) then
       err m "invalid UTF-8 in GLOBAL";
-    push m (Global { modul; name })
+    emit m (Global { modul; name })
   end
   else if c = Opcode.stack_global then begin
     let name = pop m in
     let modul = pop m in
-    match (modul, name) with
-    | Str modul, Str name -> push m (Global { modul; name })
+    match (Value.as_string modul, Value.as_string name) with
+    | Some modul, Some name -> emit m (Global { modul; name })
     | _ -> err m "STACK_GLOBAL expects two strings"
   end
   else if c = Opcode.reduce then begin
     let args = tuple_args m "REDUCE" (pop m) in
     let func = pop m in
-    push m (Reduce { func; args })
+    instance m (Reduce { func; args })
   end
   else if c = Opcode.build then begin
     let state = pop m in
-    match top m with
-    | Object o -> o.state <- Some state
-    | inst ->
-        ignore (pop m);
-        push m (Object { cls = inst; args = Tuple [||]; state = Some state })
+    mutate m "BUILD" (top m) (Build state)
   end
   else if c = Opcode.newobj then begin
     let args = tuple_args m "NEWOBJ" (pop m) in
     let cls = pop m in
-    push m (Object { cls; args; state = None })
+    instance m (New { cls; args; kwargs = None })
   end
   else if c = Opcode.newobj_ex then begin
     let kwargs = pop m in
+    if not (Value.is_dict kwargs) then
+      err m "NEWOBJ_EX expects a keyword dictionary";
     let args = tuple_args m "NEWOBJ_EX" (pop m) in
     let cls = pop m in
-    let args =
-      match kwargs with
-      | Dict { contents = [] } -> args
-      | Dict _ -> Tuple [| args; kwargs |]
-      | _ -> err m "NEWOBJ_EX expects a keyword dictionary"
-    in
-    push m (Object { cls; args; state = None })
+    instance m (New { cls; args; kwargs = Some kwargs })
   end
   else if c = Opcode.inst then begin
     let modul = ascii m "INST" (Src.line s) in
     let name = ascii m "INST" (Src.line s) in
-    let args = pop_mark m in
-    push m
-      (Object
-         {
-           cls = Global { modul; name };
-           args = Tuple (Array.of_list args);
-           state = None;
-         })
+    let args = Value.make (Tuple (Array.of_list (pop_mark m))) in
+    let cls = Value.make (Global { modul; name }) in
+    instance m (Legacy_instantiate { cls; args })
   end
   else if c = Opcode.obj then
     begin match pop_mark m with
-    | cls :: args ->
-        push m (Object { cls; args = Tuple (Array.of_list args); state = None })
+    | cls :: items ->
+        let args = Value.make (Tuple (Array.of_list items)) in
+        instance m (Legacy_instantiate { cls; args })
     | [] -> err m "OBJ with empty mark"
     end (* persistent ids *)
   else if c = Opcode.persid then
-    push m (Persistent (Str (ascii m "PERSID" (Src.line s))))
+    emit m (Persistent (Value.make (Str (ascii m "PERSID" (Src.line s)))))
   else if c = Opcode.binpersid then
     let id = pop m in
-    push m (Persistent id)
+    emit m (Persistent id)
   else err m "unknown opcode 0x%02x" op
 
 (* Decode a single pickle from [src]. *)
-let run ?(legacy_strings = Latin1) src =
+let run ?memo ?(legacy_strings = Latin1) ?(strict_stack = false) src =
   let limits = Src.limits src in
+  let memo = match memo with Some memo -> memo | None -> Hashtbl.create 64 in
   let m =
     {
       src;
@@ -693,8 +682,9 @@ let run ?(legacy_strings = Latin1) src =
       marks = 0;
       opcodes = limits.opcodes;
       work = limits.work;
-      memo = Hashtbl.create 64;
+      memo;
       legacy_strings;
+      strict_stack;
     }
   in
   let rec loop () =

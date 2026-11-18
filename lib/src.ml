@@ -84,6 +84,19 @@ let refill t =
   end
 
 let available t = t.len - t.off
+let at_end t = available t = 0 && not (refill t)
+
+let begin_pickle t =
+  t.unread_budget <- t.limits.input_bytes;
+  t.frame_remaining <- None
+
+let release t =
+  let length = available t in
+  if length > 0 then begin
+    let slice = Bytes.Slice.make t.buf ~first:t.off ~length in
+    Bytes.Reader.push_back t.reader slice;
+    t.off <- t.len
+  end
 
 (* Read a single byte, or raise on end of data. *)
 let byte t =
@@ -163,10 +176,6 @@ let line t =
         if scan_len > remaining then begin
           advance t remaining;
           Error.raise_at ~kind:Limit t.pos "line byte limit exceeded"
-        end;
-        if scan_len < can_read then begin
-          advance t scan_len;
-          check_input t 1
         end;
         check_input t scan_len;
         Buffer.add_subbytes b t.buf t.off scan_len;

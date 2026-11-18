@@ -192,16 +192,16 @@ fragment covers), a __reduce__ instance, and a NEWOBJ/copy_reg instance:
   set_simple proto0: <reduce <global __builtin__.set> ([1, 2],)>
   class_object proto0: <global __main__.Sample>
   reduce_instance proto0: <reduce <global __main__.ReduceSample> ()>
-  class_instance proto0: <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.Sample>, <global __builtin__.object>, None)>
-  () state={'attr': 5}>
+  class_instance proto0: <reduce <global copy_reg._reconstructor>
+  (<global __main__.Sample>, <global __builtin__.object>, None)
+  state={'attr': 5}>
   bytes_short proto1: <reduce <global _codecs.encode> ('\x00Uªÿ', 'latin1')>
   set_simple proto1: <reduce <global __builtin__.set> ([1, 2],)>
   class_object proto1: <global __main__.Sample>
   reduce_instance proto1: <reduce <global __main__.ReduceSample> ()>
-  class_instance proto1: <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.Sample>, <global __builtin__.object>, None)>
-  () state={'attr': 5}>
+  class_instance proto1: <reduce <global copy_reg._reconstructor>
+  (<global __main__.Sample>, <global __builtin__.object>, None)
+  state={'attr': 5}>
   bytes_short proto2: <reduce <global _codecs.encode> ('\x00Uªÿ', 'latin1')>
   set_simple proto2: <reduce <global __builtin__.set> ([1, 2],)>
   class_object proto2: <global __main__.Sample>

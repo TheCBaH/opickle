@@ -1,17 +1,19 @@
-open Opickle.Value
+module V = Opickle.Value
+
+let decode = Opickle.of_string_exn
+let show s = print_endline (V.to_string (decode s))
 
 let%expect_test "scalars" =
-  List.iter
-    (fun v -> print_endline (to_string v))
+  List.iter show
     [
-      None;
-      Bool true;
-      Bool false;
-      Int 42L;
-      Int (-7L);
-      Float 1.0;
-      Float (-1.25);
-      Str "hi";
+      "N.";
+      "I01\n.";
+      "I00\n.";
+      "I42\n.";
+      "I-7\n.";
+      "F1.0\n.";
+      "F-1.25\n.";
+      "Vhi\n.";
     ];
   [%expect
     {|
@@ -25,32 +27,29 @@ let%expect_test "scalars" =
     'hi' |}]
 
 let%expect_test "big integer decimal" =
-  let bigint negative magnitude = to_string (Bigint { negative; magnitude }) in
-  print_endline (bigint false "\x00\x01");
-  (* 256 *)
-  print_endline (bigint false "\xff\xff");
-  (* 65535 *)
-  (* 2^64 = 18446744073709551616, little-endian = eight 0x00 then 0x01 *)
-  print_endline (bigint false "\x00\x00\x00\x00\x00\x00\x00\x00\x01");
-  (* 10^20, little-endian of 0x056BC75E2D63100000 *)
-  print_endline (bigint false "\x00\x00\x10\x63\x2d\x5e\xc7\x6b\x05");
-  print_endline (bigint true "\x80\x00");
-  (* magnitude 0x0080 = 128, negated *)
+  List.iter show
+    [
+      "L18446744073709551616L\n.";
+      "L100000000000000000000L\n.";
+      "L-100000000000000000000L\n.";
+    ];
   [%expect
     {|
-    256
-    65535
     18446744073709551616
     100000000000000000000
-    -128 |}]
+    -100000000000000000000 |}]
 
 let%expect_test "containers and bytes" =
-  print_endline (to_string (List (ref [ Int 1L; Int 2L; Int 3L ])));
-  print_endline (to_string (Tuple [| Int 1L |]));
-  print_endline (to_string (Tuple [||]));
-  print_endline (to_string (Dict (ref [ (Str "a", Int 1L) ])));
-  print_endline (to_string (Set (ref [])));
-  print_endline (to_string (Bytes "\x00\x55\xaa\xff"));
+  List.iter show
+    [
+      "(I1\nI2\nI3\nl.";
+      "I1\n\x85.";
+      ").";
+      "(Va\nI1\nd.";
+      "\x8f.";
+      "C\x04\x00\x55\xaa\xff.";
+      "(\x91.";
+    ];
   [%expect
     {|
     [1, 2, 3]
@@ -58,26 +57,47 @@ let%expect_test "containers and bytes" =
     ()
     {'a': 1}
     set()
-    b'\x00U\xaa\xff' |}]
+    b'\x00U\xaa\xff'
+    frozenset() |}]
 
-let%expect_test "recursive list renders with ellipsis" =
-  (* Build the cycle the way the unpickler does: one node, memoised, referenced
-     from inside its own ref cell (so the node is physically reused). *)
-  let r = ref [] in
-  let node = List r in
-  r := [ node ];
-  print_string (to_string node);
-  [%expect "[[...]]"]
-
-let%expect_test "non-data nodes" =
-  print_endline
-    (to_string (Global { modul = "copyreg"; name = "_reconstructor" }));
-  print_endline
-    (to_string
-       (Reduce { func = Global { modul = "m"; name = "f" }; args = Tuple [||] }));
-  print_endline (to_string (Persistent (Int 3L)));
+let%expect_test "diagnostic escaping and round-tripping floats" =
+  List.iter show
+    [
+      "Vit's\n.";
+      "V\\u007f\\u0080\\ud800\n.";
+      "cmodule\nname\r\n.";
+      "F0.1234567890123456\n.";
+    ];
   [%expect
     {|
-    <global copyreg._reconstructor>
-    <reduce <global m.f> ()>
-    <persid 3> |}]
+    "it's"
+    '\x7f\x80\ud800'
+    <global module.name\r>
+    0.1234567890123456 |}]
+
+let%expect_test
+    "recursive list and object state render without expanding cycles" =
+  show "]q\x00h\x00a.";
+  show "cm\nf\n)Rq\x00h\x00b.";
+  [%expect {|
+    [[...]]
+    <reduce <global m.f> () state=<cycle>> |}]
+
+let%test_unit "independent depth, visit, output and decimal rendering bounds" =
+  let limits = V.default_print_limits in
+  let graph = decode "]q\x00K\x01a]q\x01h\x00ah\x00a]h\x01ah\x01a." in
+  assert (V.to_string ~limits:{ limits with depth = 0 } graph = "[..., ...]");
+  let printed =
+    V.to_string ~limits:{ limits with visits = 3; output_bytes = 8 } graph
+  in
+  assert (String.ends_with ~suffix:"..." printed && String.length printed <= 8);
+  let text =
+    V.to_string ~limits:{ limits with output_bytes = 4 } (decode "Vabcdefgh\n.")
+  in
+  assert (text = "...");
+  let n =
+    V.to_string
+      ~limits:{ limits with decimal_bytes = 1 }
+      (decode "L18446744073709551616L\n.")
+  in
+  assert (n = "<integer: 9 bytes>")

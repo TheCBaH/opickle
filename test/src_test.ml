@@ -1,4 +1,5 @@
 open Opickle
+module Src = Opickle.Private.Src
 
 (* Build a source over [s], forcing tiny slices so the multi-slice paths of
    [take]/[line] are exercised even on short inputs. *)

@@ -6,6 +6,7 @@ import pickletools
 import random
 import struct
 import sys
+from collections import OrderedDict
 
 
 class Sample:
@@ -14,8 +15,15 @@ class Sample:
 
 
 class WithKeywords:
+    def __new__(cls, value=3, *, name="sample"):
+        return super().__new__(cls)
+
     def __getnewargs_ex__(self):
         return (3,), {"name": "sample"}
+
+
+class ListSample(list):
+    pass
 
 
 def set_state(obj, state):
@@ -30,6 +38,9 @@ class WithStateSetter:
 class SelfState:
     def __getstate__(self):
         return self
+
+    def __setstate__(self, state):
+        self.state = state
 
 
 class PersistentIdPickler(pickle.Pickler):
@@ -155,10 +166,20 @@ def main():
   | Set of value list
   | Frozenset of value list
   | Global of string * string
-  | Reduce of value * value
-  | Object of value * value * value option
+  | Object of constructor * operation list
   | Persistent of value
   | Extension of int32
+
+and constructor =
+  | Reduce of value * value
+  | New of value * value * value option
+  | Legacy of value * value
+
+and operation =
+  | Append of value
+  | Set_item of value * value
+  | Add_item of value
+  | Build of value
 
 type outcome = Value of value | External_buffer of int
 
@@ -285,36 +306,68 @@ let cases = ["""
     wire(
         "inst",
         b"(i__main__\nSample\n.",
-        'Object (Global ("__main__", "Sample"), Tuple [], None)',
+        'Object (Legacy (Global ("__main__", "Sample"), Tuple []), [])',
         "INST",
     )
     wire(
         "obj",
         b"\x80\x02(c__main__\nSample\no.",
-        'Object (Global ("__main__", "Sample"), Tuple [], None)',
+        'Object (Legacy (Global ("__main__", "Sample"), Tuple []), [])',
         "OBJ",
     )
     wire("stack-global", pickle.dumps(Sample, 4), 'Global ("__main__", "Sample")', "STACK_GLOBAL")
     wire(
         "object-state",
         pickle.dumps(Sample(), 4),
-        'Object (Global ("__main__", "Sample"), Tuple [], Some (Dict [(Text "attr", Int 5L)]))',
+        'Object (New (Global ("__main__", "Sample"), Tuple [], None), '
+        '[Build (Dict [(Text "attr", Int 5L)])])',
         "NEWOBJ",
         "BUILD",
     )
     wire(
         "keyword-arguments",
         pickle.dumps(WithKeywords(), 4),
-        'Object (Global ("__main__", "WithKeywords"), '
-        'Tuple [Tuple [Int 3L]; Dict [(Text "name", Text "sample")]], None)',
+        'Object (New (Global ("__main__", "WithKeywords"), Tuple [Int 3L], '
+        'Some (Dict [(Text "name", Text "sample")])), [])',
         "NEWOBJ_EX",
     )
     wire(
         "explicit-state-setter",
         pickle.dumps(WithStateSetter(), 5),
-        'Reduce (Global ("__main__", "WithStateSetter"), Tuple [])',
+        'Object (Reduce (Global ("__main__", "WithStateSetter"), Tuple []), [])',
         "REDUCE",
         "POP",
+    )
+    wire(
+        "ordered-dict",
+        pickle.dumps(OrderedDict([("b", 2), ("a", 1)]), 4),
+        'Object (Reduce (Global ("collections", "OrderedDict"), Tuple []), '
+        '[Set_item (Text "b", Int 2L); Set_item (Text "a", Int 1L)])',
+        "REDUCE",
+        "SETITEMS",
+    )
+    wire(
+        "list-subclass",
+        pickle.dumps(ListSample([7, 8]), 4),
+        'Object (New (Global ("__main__", "ListSample"), Tuple [], None), '
+        '[Append (Int 7L); Append (Int 8L)])',
+        "NEWOBJ",
+        "APPENDS",
+    )
+    wire(
+        "interleaved-mutations",
+        b"\x80\x02c__main__\nListSample\n)\x81K\x07a}bK\x08a}b.",
+        'Object (New (Global ("__main__", "ListSample"), Tuple [], None), '
+        '[Append (Int 7L); Build (Dict []); Append (Int 8L); Build (Dict [])])',
+        "NEWOBJ",
+        "APPEND",
+        "BUILD",
+    )
+    wire(
+        "repeated-dict-key",
+        b"}X\x01\0\0\0aK\x07sX\x01\0\0\0aK\x08s.",
+        'Dict [(Text "a", Int 7L); (Text "a", Int 8L)]',
+        "SETITEM",
     )
 
     for protocol, opcode in [(0, "PERSID"), (1, "BINPERSID")]:
@@ -349,10 +402,12 @@ let cases = ["""
     print("let graph_cases = [")
     recursive_list = []
     recursive_list.append(recursive_list)
+    shared_sample = Sample()
     for name, data, required in [
         ("shared-list", pickle.dumps([[]] * 2, 4), ["BINGET"]),
         ("recursive-list", pickle.dumps(recursive_list, 4), ["EMPTY_LIST", "BINGET"]),
         ("self-state", pickle.dumps(SelfState(), 4), ["BUILD", "BINGET"]),
+        ("reduce-build-alias", pickle.dumps([shared_sample] * 2, 0), ["REDUCE", "BUILD", "GET"]),
     ]:
         check_opcodes(name, data, required)
         print(f"  ({ocaml_string(name)}, {ocaml_string(data)});")

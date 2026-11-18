@@ -1,48 +1,103 @@
-(* Public entry points for unpickling Python pickle streams.
-
-   The library decodes a single pickle (protocols 0-5) into a {!Value.t}.  Input
-   is consumed through [bytesrw]'s {!Bytesrw.Bytes.Reader}, so any source it can
-   wrap — strings, channels, files, filters — can be unpickled. *)
-
 module Value = Value
 module Error = Error
 module Limits = Limits
 
-(* [Src] and [Unpickler] are internal building blocks, re-exported so they can
-   be unit-tested in isolation and reused for advanced streaming. *)
-module Src = Src
-module Unpickler = Unpickler
+module Private = struct
+  module Src = Src
+end
+
 open Bytesrw
 
 type legacy_strings = Unpickler.legacy_strings = Latin1 | Raw_bytes
 
-let of_reader_exn ?limits ?legacy_strings ?check_frames reader =
-  Unpickler.run ?legacy_strings (Src.of_reader ?limits ?check_frames reader)
+let as_result f arg = try Ok (f arg) with Error.E error -> Error error
 
-let of_reader ?limits ?legacy_strings ?check_frames reader =
-  try Ok (of_reader_exn ?limits ?legacy_strings ?check_frames reader)
-  with Error.E e -> Result.Error e
+let of_reader_exn ?limits ?legacy_strings ?check_frames ?(exact = false) reader
+    =
+  let src = Src.of_reader ?limits ?check_frames reader in
+  let value = Unpickler.run ?legacy_strings ~strict_stack:exact src in
+  if exact && not (Src.at_end src) then
+    Error.raise_at (Src.pos src) "trailing data after STOP";
+  Src.release src;
+  value
 
-let of_string_exn ?limits ?legacy_strings ?check_frames s =
-  of_reader_exn ?limits ?legacy_strings ?check_frames (Bytes.Reader.of_string s)
+let of_reader ?limits ?legacy_strings ?check_frames ?exact reader =
+  as_result (of_reader_exn ?limits ?legacy_strings ?check_frames ?exact) reader
 
-let of_string ?limits ?legacy_strings ?check_frames s =
-  of_reader ?limits ?legacy_strings ?check_frames (Bytes.Reader.of_string s)
+let of_string_exn ?limits ?legacy_strings ?check_frames ?exact s =
+  of_reader_exn ?limits ?legacy_strings ?check_frames ?exact
+    (Bytes.Reader.of_string s)
 
-let of_in_channel_exn ?limits ?legacy_strings ?check_frames ic =
-  of_reader_exn ?limits ?legacy_strings ?check_frames
+let of_string ?limits ?legacy_strings ?check_frames ?exact s =
+  as_result (of_string_exn ?limits ?legacy_strings ?check_frames ?exact) s
+
+let of_in_channel_exn ?limits ?legacy_strings ?check_frames ?exact ic =
+  of_reader_exn ?limits ?legacy_strings ?check_frames ?exact
     (Bytes.Reader.of_in_channel ic)
 
-let of_in_channel ?limits ?legacy_strings ?check_frames ic =
-  of_reader ?limits ?legacy_strings ?check_frames
-    (Bytes.Reader.of_in_channel ic)
+let of_in_channel ?limits ?legacy_strings ?check_frames ?exact ic =
+  as_result (of_in_channel_exn ?limits ?legacy_strings ?check_frames ?exact) ic
 
-let of_file_exn ?limits ?legacy_strings ?check_frames path =
+let of_file_exn ?limits ?legacy_strings ?check_frames ?exact path =
   try
     In_channel.with_open_bin path
-      (of_in_channel_exn ?limits ?legacy_strings ?check_frames)
+      (of_in_channel_exn ?limits ?legacy_strings ?check_frames ?exact)
   with Sys_error msg -> Error.raise_at ~kind:Input 0L "%s" msg
 
-let of_file ?limits ?legacy_strings ?check_frames path =
-  try Ok (of_file_exn ?limits ?legacy_strings ?check_frames path)
-  with Error.E e -> Result.Error e
+let of_file ?limits ?legacy_strings ?check_frames ?exact path =
+  as_result (of_file_exn ?limits ?legacy_strings ?check_frames ?exact) path
+
+module Session = struct
+  type memo_mode = Independent | Shared
+
+  type t = {
+    src : Src.t;
+    memo : (int64, Value.t) Hashtbl.t option;
+    legacy_strings : legacy_strings;
+    strict_stack : bool;
+    mutable failed : bool;
+  }
+
+  let of_reader ?limits ?(legacy_strings = Latin1) ?check_frames
+      ?(strict_stack = false) ?(memo = Independent) reader =
+    let src = Src.of_reader ?limits ?check_frames reader in
+    let memo =
+      match memo with Independent -> None | Shared -> Some (Hashtbl.create 64)
+    in
+    { src; memo; legacy_strings; strict_stack; failed = false }
+
+  let of_in_channel ?limits ?legacy_strings ?check_frames ?strict_stack ?memo ic
+      =
+    of_reader ?limits ?legacy_strings ?check_frames ?strict_stack ?memo
+      (Bytes.Reader.of_in_channel ic)
+
+  let pos session = Src.pos session.src
+
+  let check_failed session =
+    if session.failed then
+      Error.raise_at ~kind:Input (pos session) "decoder session failed"
+
+  let reset_memo session =
+    if session.failed then invalid_arg "Opickle: decoder session failed";
+    Option.iter Hashtbl.clear session.memo
+
+  let load_exn session =
+    check_failed session;
+    Src.begin_pickle session.src;
+    match
+      if Src.at_end session.src then None
+      else
+        Some
+          (Unpickler.run ?memo:session.memo
+             ~legacy_strings:session.legacy_strings
+             ~strict_stack:session.strict_stack session.src)
+    with
+    | value -> value
+    | exception exn ->
+        let backtrace = Printexc.get_raw_backtrace () in
+        session.failed <- true;
+        Option.iter Hashtbl.clear session.memo;
+        Printexc.raise_with_backtrace exn backtrace
+
+  let load = as_result load_exn
+end
