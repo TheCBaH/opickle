@@ -1,176 +1,113 @@
-Decode every fixture pickle and snapshot the rendered value.
+Exercise the CLI with fixtures generated from this source archive.
 
-Python 3 fixtures across all protocols (the big mixed test_object dict):
+  $ python3 dump_fixtures.py
 
-  $ pickle_dump tests_py3_proto0.pickle
-  {None: None, False: (False, True), 1000: 100000,
-  100000000000000000000: 100000000000000000000, 1.0: 1.0,
-  <reduce <global _codecs.encode> ('bytes', 'latin1')>:
-  <reduce <global _codecs.encode> ('bytes', 'latin1')>, 'string': 'string',
-  (1, 2): (1, 2, 3),
-  <reduce <global __builtin__.frozenset> ([0, 42],)>:
-  <reduce <global __builtin__.frozenset> ([0, 42],)>,
-  ():
-  [[1, 2, 3], <reduce <global __builtin__.set> ([0, 42],)>, {},
+Mixed values written by Python 3 at all supported protocol versions.
+
+  $ for protocol in 0 1 2 3 4 5; do
+  >   printf 'protocol %s\n' "$protocol"
+  >   pickle_dump "mixed_$protocol.pickle"
+  > done
+  protocol 0
+  {'numbers': (None, False, True, 256, -5000, 18889465931478580854784, 1.5),
+  'text': 'café', 'bytes': <reduce <global _codecs.encode> ('ink', 'latin1')>,
+  'containers':
+  ([4, 5], <reduce <global __builtin__.set> ([11, 7],)>,
+  <reduce <global __builtin__.frozenset> ([7],)>, {}, ()),
+  'mutable_bytes':
   <reduce <global __builtin__.bytearray>
-  (<reduce <global _codecs.encode> ('\x00Uªÿ', 'latin1')>,)>],
-  7:
-  <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.Class>, <global __builtin__.object>, None)>
-  () state={'attr': 5}>,
-  8:
+  (<reduce <global _codecs.encode> ('\x00ÿ', 'latin1')>,)>,
+  'objects':
+  (<object <reduce <global copy_reg._reconstructor>
+           (<global __main__.Sample>, <global __builtin__.object>, None)>
+   () state={'level': 3, 'name': 'sample'}>,
   <reduce <global copy_reg._reconstructor>
-  (<global __main__.NamedTuple>, <global __builtin__.tuple>, ('abc', 10))>,
-  9:
-  <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.DataClass>, <global __builtin__.object>, None)>
-  () state={'type': 'abcd', 'quantity': 100}>,
-  42: <reduce <global __main__.NormalEnum> (30,)>,
-  43: <reduce <global __main__.ByValueEnum> (20,)>}
-  $ pickle_dump tests_py3_proto1.pickle
-  {None: None, False: (False, True), 1000: 100000,
-  100000000000000000000: 100000000000000000000, 1.0: 1.0,
-  <reduce <global _codecs.encode> ('bytes', 'latin1')>:
-  <reduce <global _codecs.encode> ('bytes', 'latin1')>, 'string': 'string',
-  (1, 2): (1, 2, 3),
-  <reduce <global __builtin__.frozenset> ([0, 42],)>:
-  <reduce <global __builtin__.frozenset> ([0, 42],)>,
-  ():
-  [[1, 2, 3], <reduce <global __builtin__.set> ([0, 42],)>, {},
+  (<global __main__.Point>, <global __builtin__.tuple>, ('A', 4))>,
+  <reduce <global __main__.Direction> (1,)>)}
+  protocol 1
+  {'numbers': (None, False, True, 256, -5000, 18889465931478580854784, 1.5),
+  'text': 'café', 'bytes': <reduce <global _codecs.encode> ('ink', 'latin1')>,
+  'containers':
+  ([4, 5], <reduce <global __builtin__.set> ([11, 7],)>,
+  <reduce <global __builtin__.frozenset> ([7],)>, {}, ()),
+  'mutable_bytes':
   <reduce <global __builtin__.bytearray>
-  (<reduce <global _codecs.encode> ('\x00Uªÿ', 'latin1')>,)>],
-  7:
-  <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.Class>, <global __builtin__.object>, None)>
-  () state={'attr': 5}>,
-  8:
+  (<reduce <global _codecs.encode> ('\x00ÿ', 'latin1')>,)>,
+  'objects':
+  (<object <reduce <global copy_reg._reconstructor>
+           (<global __main__.Sample>, <global __builtin__.object>, None)>
+   () state={'level': 3, 'name': 'sample'}>,
   <reduce <global copy_reg._reconstructor>
-  (<global __main__.NamedTuple>, <global __builtin__.tuple>, ('abc', 10))>,
-  9:
-  <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.DataClass>, <global __builtin__.object>, None)>
-  () state={'type': 'abcd', 'quantity': 100}>,
-  42: <reduce <global __main__.NormalEnum> (30,)>,
-  43: <reduce <global __main__.ByValueEnum> (20,)>}
-  $ pickle_dump tests_py3_proto2.pickle
-  {None: None, False: (False, True), 1000: 100000,
-  100000000000000000000: 100000000000000000000, 1.0: 1.0,
-  <reduce <global _codecs.encode> ('bytes', 'latin1')>:
-  <reduce <global _codecs.encode> ('bytes', 'latin1')>, 'string': 'string',
-  (1, 2): (1, 2, 3),
-  <reduce <global __builtin__.frozenset> ([0, 42],)>:
-  <reduce <global __builtin__.frozenset> ([0, 42],)>,
-  ():
-  [[1, 2, 3], <reduce <global __builtin__.set> ([0, 42],)>, {},
+  (<global __main__.Point>, <global __builtin__.tuple>, ('A', 4))>,
+  <reduce <global __main__.Direction> (1,)>)}
+  protocol 2
+  {'numbers': (None, False, True, 256, -5000, 18889465931478580854784, 1.5),
+  'text': 'café', 'bytes': <reduce <global _codecs.encode> ('ink', 'latin1')>,
+  'containers':
+  ([4, 5], <reduce <global __builtin__.set> ([11, 7],)>,
+  <reduce <global __builtin__.frozenset> ([7],)>, {}, ()),
+  'mutable_bytes':
   <reduce <global __builtin__.bytearray>
-  (<reduce <global _codecs.encode> ('\x00Uªÿ', 'latin1')>,)>],
-  7: <object <global __main__.Class> () state={'attr': 5}>,
-  8: <object <global __main__.NamedTuple> ('abc', 10)>,
-  9:
-  <object <global __main__.DataClass> ()
-  state={'type': 'abcd', 'quantity': 100}>,
-  42: <reduce <global __main__.NormalEnum> (30,)>,
-  43: <reduce <global __main__.ByValueEnum> (20,)>}
-  $ pickle_dump tests_py3_proto3.pickle
-  {None: None, False: (False, True), 1000: 100000,
-  100000000000000000000: 100000000000000000000, 1.0: 1.0, b'bytes': b'bytes',
-  'string': 'string', (1, 2): (1, 2, 3),
-  <reduce <global builtins.frozenset> ([0, 42],)>:
-  <reduce <global builtins.frozenset> ([0, 42],)>,
-  ():
-  [[1, 2, 3], <reduce <global builtins.set> ([0, 42],)>, {},
-  <reduce <global builtins.bytearray> (b'\x00U\xaa\xff',)>],
-  7: <object <global __main__.Class> () state={'attr': 5}>,
-  8: <object <global __main__.NamedTuple> ('abc', 10)>,
-  9:
-  <object <global __main__.DataClass> ()
-  state={'type': 'abcd', 'quantity': 100}>,
-  42: <reduce <global __main__.NormalEnum> (30,)>,
-  43: <reduce <global __main__.ByValueEnum> (20,)>}
-  $ pickle_dump tests_py3_proto4.pickle
-  {None: None, False: (False, True), 1000: 100000,
-  100000000000000000000: 100000000000000000000, 1.0: 1.0, b'bytes': b'bytes',
-  'string': 'string', (1, 2): (1, 2, 3),
-  frozenset({0, 42}): frozenset({0, 42}),
-  ():
-  [[1, 2, 3], {0, 42}, {},
-  <reduce <global builtins.bytearray> (b'\x00U\xaa\xff',)>],
-  7: <object <global __main__.Class> () state={'attr': 5}>,
-  8: <object <global __main__.NamedTuple> ('abc', 10)>,
-  9:
-  <object <global __main__.DataClass> ()
-  state={'type': 'abcd', 'quantity': 100}>,
-  42: <reduce <global __main__.NormalEnum> (30,)>,
-  43: <reduce <global __main__.ByValueEnum> (20,)>}
-  $ pickle_dump tests_py3_proto5.pickle
-  {None: None, False: (False, True), 1000: 100000,
-  100000000000000000000: 100000000000000000000, 1.0: 1.0, b'bytes': b'bytes',
-  'string': 'string', (1, 2): (1, 2, 3),
-  frozenset({0, 42}): frozenset({0, 42}),
-  (): [[1, 2, 3], {0, 42}, {}, bytearray(b'\x00U\xaa\xff')],
-  7: <object <global __main__.Class> () state={'attr': 5}>,
-  8: <object <global __main__.NamedTuple> ('abc', 10)>,
-  9:
-  <object <global __main__.DataClass> ()
-  state={'type': 'abcd', 'quantity': 100}>,
-  42: <reduce <global __main__.NormalEnum> (30,)>,
-  43: <reduce <global __main__.ByValueEnum> (20,)>}
+  (<reduce <global _codecs.encode> ('\x00ÿ', 'latin1')>,)>,
+  'objects':
+  (<object <global __main__.Sample> () state={'level': 3, 'name': 'sample'}>,
+  <object <global __main__.Point> ('A', 4)>,
+  <reduce <global __main__.Direction> (1,)>)}
+  protocol 3
+  {'numbers': (None, False, True, 256, -5000, 18889465931478580854784, 1.5),
+  'text': 'café', 'bytes': b'ink',
+  'containers':
+  ([4, 5], <reduce <global builtins.set> ([11, 7],)>,
+  <reduce <global builtins.frozenset> ([7],)>, {}, ()),
+  'mutable_bytes': <reduce <global builtins.bytearray> (b'\x00\xff',)>,
+  'objects':
+  (<object <global __main__.Sample> () state={'level': 3, 'name': 'sample'}>,
+  <object <global __main__.Point> ('A', 4)>,
+  <reduce <global __main__.Direction> (1,)>)}
+  protocol 4
+  {'numbers': (None, False, True, 256, -5000, 18889465931478580854784, 1.5),
+  'text': 'café', 'bytes': b'ink',
+  'containers': ([4, 5], {11, 7}, frozenset({7}), {}, ()),
+  'mutable_bytes': <reduce <global builtins.bytearray> (b'\x00\xff',)>,
+  'objects':
+  (<object <global __main__.Sample> () state={'level': 3, 'name': 'sample'}>,
+  <object <global __main__.Point> ('A', 4)>,
+  <reduce <global __main__.Direction> (1,)>)}
+  protocol 5
+  {'numbers': (None, False, True, 256, -5000, 18889465931478580854784, 1.5),
+  'text': 'café', 'bytes': b'ink',
+  'containers': ([4, 5], {11, 7}, frozenset({7}), {}, ()),
+  'mutable_bytes': bytearray(b'\x00\xff'),
+  'objects':
+  (<object <global __main__.Sample> () state={'level': 3, 'name': 'sample'}>,
+  <object <global __main__.Point> ('A', 4)>,
+  <reduce <global __main__.Direction> (1,)>)}
 
-Python 2 fixtures (protocols 0-2):
+Python 2 text and binary string forms, including Latin-1 bytes and Unicode.
+Normalize line breaks for this case because Format's Unicode width varies
+between supported compiler versions.
 
-  $ pickle_dump tests_py2_proto0.pickle
-  {False: (False, True), 1.0: 1.0,
-  100000000000000000000: 100000000000000000000,
-  7:
-  <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.Class>, <global __builtin__.object>, None)>
-  () state={'attr': 5}>,
-  <reduce <global __builtin__.frozenset> ([0, 42],)>:
-  <reduce <global __builtin__.frozenset> ([0, 42],)>, 'string': 'string',
-  (1, 2): (1, 2, 3), None: None, 1000: 100000, 'bytes': 'bytes',
-  ():
-  [[1, 2, 3], <reduce <global __builtin__.set> ([0, 42],)>, {},
-  <reduce <global __builtin__.bytearray> ('\x00Uªÿ', 'latin-1')>]}
-  $ pickle_dump tests_py2_proto1.pickle
-  {False: (False, True), 1.0: 1.0,
-  100000000000000000000: 100000000000000000000,
-  7:
-  <object <reduce <global copy_reg._reconstructor>
-          (<global __main__.Class>, <global __builtin__.object>, None)>
-  () state={'attr': 5}>,
-  <reduce <global __builtin__.frozenset> ([0, 42],)>:
-  <reduce <global __builtin__.frozenset> ([0, 42],)>, 'string': 'string',
-  (1, 2): (1, 2, 3), None: None, 1000: 100000, 'bytes': 'bytes',
-  ():
-  [[1, 2, 3], <reduce <global __builtin__.set> ([0, 42],)>, {},
-  <reduce <global __builtin__.bytearray> ('\x00Uªÿ', 'latin-1')>]}
-  $ pickle_dump tests_py2_proto2.pickle
-  {False: (False, True), 1.0: 1.0,
-  100000000000000000000: 100000000000000000000,
-  7: <object <global __main__.Class> () state={'attr': 5}>,
-  <reduce <global __builtin__.frozenset> ([0, 42],)>:
-  <reduce <global __builtin__.frozenset> ([0, 42],)>, 'string': 'string',
-  (1, 2): (1, 2, 3), None: None, 1000: 100000, 'bytes': 'bytes',
-  ():
-  [[1, 2, 3], <reduce <global __builtin__.set> ([0, 42],)>, {},
-  <reduce <global __builtin__.bytearray> ('\x00Uªÿ', 'latin-1')>]}
+  $ for protocol in 0 1 2; do
+  >   rendered=$(pickle_dump "legacy_$protocol.pickle") || exit $?
+  >   printf '%s\n' "$(printf '%s' "$rendered" | tr '\n' ' ')"
+  > done
+  ['café', 'café', <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
+  ['café', 'café', 'wide', <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
+  ['café', 'café', 'wide', <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
 
-Self-referential structure (cycle handling) across all protocols:
+A recursive list reached through an immutable tuple at all protocol versions.
 
-  $ pickle_dump test_recursive_proto0.pickle
+  $ for protocol in 0 1 2 3 4 5; do
+  >   pickle_dump "recursive_$protocol.pickle"
+  > done
   [([[...]],)]
-  $ pickle_dump test_recursive_proto1.pickle
   [([[...]],)]
-  $ pickle_dump test_recursive_proto2.pickle
   [([[...]],)]
-  $ pickle_dump test_recursive_proto3.pickle
   [([[...]],)]
-  $ pickle_dump test_recursive_proto4.pickle
   [([[...]],)]
-  $ pickle_dump test_recursive_proto5.pickle
   [([[...]],)]
 
-A reduce/global that does not resolve to anything is kept structurally:
+An unresolved global used as a callable is kept structurally.
 
-  $ pickle_dump test_unresolvable_global.pickle
-  <reduce <global __main__.ReduceClass> ()>
+  $ pickle_dump opaque.pickle
+  <reduce <global fixture_only.Unknown> ()>

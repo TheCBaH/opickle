@@ -12,10 +12,12 @@
  (name opickle)
  (synopsis "A Python pickle parser for OCaml")
  (description
-  "opickle decodes a Python pickle byte stream (protocols 0-5) into an OCaml value tree, reading input through bytesrw. Parser only -- no serialization.")
+  "opickle reads Python pickle streams (protocols 0-5) through bytesrw and returns a structural OCaml value graph. Reconstruction calls are represented as data.")
  (depends
   (ocaml
    (>= 4.14))
   dune
   bytesrw
-  cmdliner))
+  cmdliner
+  (ppx_expect :with-test)
+  (conf-python-3 :with-test)))

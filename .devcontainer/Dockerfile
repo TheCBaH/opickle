@@ -8,6 +8,7 @@ RUN set -eux;\
   gcc\
   git\
   make\
+  nodejs\
   python3\
   ripgrep\
   wget\
