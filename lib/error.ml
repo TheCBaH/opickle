@@ -1,13 +1,20 @@
 (* Errors raised while unpickling. *)
 
+type kind = Truncated | Malformed | Unsupported | Limit | Input
+
 type t = {
-  pos : int;  (** byte offset in the stream where the problem was detected *)
+  kind : kind;
+  pos : int64;  (** byte offset where the problem was detected *)
+  opcode_pos : int64 option;
   msg : string;
 }
 
 exception E of t
 
-let raise_at pos fmt = Printf.ksprintf (fun msg -> raise (E { pos; msg })) fmt
+let raise_at ?(kind = Malformed) pos fmt =
+  Printf.ksprintf
+    (fun msg -> raise (E { kind; pos; opcode_pos = None; msg }))
+    fmt
 
-let to_string { pos; msg } =
-  Printf.sprintf "pickle error at byte %d: %s" pos msg
+let to_string { pos; msg; _ } =
+  Printf.sprintf "pickle error at byte %Ld: %s" pos msg

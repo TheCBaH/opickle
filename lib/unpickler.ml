@@ -175,21 +175,24 @@ let divmod_digits digits d =
 let all_zero digits = Array.for_all (fun x -> x = 0) digits
 
 (* Build a {!Value.t} from a decimal integer literal (sign optional). *)
-let value_of_decimal s =
+let value_of_decimal ~charge ~fail s =
+  let len = String.length s in
+  let negative = len > 0 && s.[0] = '-' in
+  let start = if len > 0 && (negative || s.[0] = '+') then 1 else 0 in
+  if start = len then fail ();
+  for i = start to len - 1 do
+    if s.[i] < '0' || s.[i] > '9' then fail ()
+  done;
   match Int64.of_string_opt s with
   | Some i -> Int i
   | None ->
-      let negative = String.length s > 0 && s.[0] = '-' in
-      let start =
-        if negative || (String.length s > 0 && s.[0] = '+') then 1 else 0
-      in
       let digits =
-        Array.init
-          (String.length s - start)
-          (fun k -> Char.code s.[start + k] - Char.code '0')
+        Array.init (len - start) (fun k ->
+            Char.code s.[start + k] - Char.code '0')
       in
       let bytes = Buffer.create 16 in
       while not (all_zero digits) do
+        charge (Array.length digits);
         Buffer.add_char bytes (Char.chr (divmod_digits digits 256))
       done;
       if Buffer.length bytes = 0 then Buffer.add_char bytes '\000';
@@ -233,17 +236,38 @@ let value_of_long_bytes data =
 type t = {
   src : Src.t;
   mutable stack : Value.t list;  (** head is the top of stack *)
-  mutable metastack : Value.t list list;  (** saved stacks, one per open MARK *)
+  mutable stack_len : int;
+  mutable live_items : int;
+  mutable metastack : (Value.t list * int) list;
+  mutable marks : int;
+  mutable opcodes : int;
+  mutable work : int;
   memo : (int, Value.t) Hashtbl.t;
 }
 
+exception Stop
+
 let err m fmt = Error.raise_at (Src.pos m.src) fmt
-let push m v = m.stack <- v :: m.stack
+
+let limited m what =
+  Error.raise_at ~kind:Limit (Src.pos m.src) "%s limit exceeded" what
+
+let charge m n =
+  if n > m.work then limited m "decode work";
+  m.work <- m.work - n
+
+let push m v =
+  if m.live_items >= (Src.limits m.src).stack_items then limited m "stack item";
+  m.stack <- v :: m.stack;
+  m.stack_len <- m.stack_len + 1;
+  m.live_items <- m.live_items + 1
 
 let pop m =
   match m.stack with
   | x :: r ->
       m.stack <- r;
+      m.stack_len <- m.stack_len - 1;
+      m.live_items <- m.live_items - 1;
       x
   | [] -> err m "pop from empty stack"
 
@@ -251,34 +275,75 @@ let top m =
   match m.stack with x :: _ -> x | [] -> err m "expected a value on the stack"
 
 let mark m =
-  m.metastack <- m.stack :: m.metastack;
-  m.stack <- []
+  if m.marks >= (Src.limits m.src).marks then limited m "mark";
+  m.metastack <- (m.stack, m.stack_len) :: m.metastack;
+  m.stack <- [];
+  m.stack_len <- 0;
+  m.marks <- m.marks + 1
+
+let drop_mark m =
+  match m.metastack with
+  | (stack, len) :: rest ->
+      m.live_items <- m.live_items - m.stack_len;
+      m.stack <- stack;
+      m.stack_len <- len;
+      m.metastack <- rest;
+      m.marks <- m.marks - 1
+  | [] -> err m "pop_mark without a matching mark"
 
 (* Items pushed since the most recent MARK, in insertion order; restores the
    stack saved by that MARK. *)
 let pop_mark m =
-  let items = List.rev m.stack in
-  (match m.metastack with
-  | s :: r ->
-      m.stack <- s;
-      m.metastack <- r
-  | [] -> err m "pop_mark without a matching mark");
-  items
+  let items = m.stack in
+  charge m m.stack_len;
+  drop_mark m;
+  List.rev items
 
 let memo_get m i =
   match Hashtbl.find_opt m.memo i with
   | Some v -> v
   | None -> err m "memo key %d not found" i
 
-let memo_put m i = Hashtbl.replace m.memo i (top m)
+let memo_put m i =
+  let value = top m in
+  if
+    Hashtbl.length m.memo >= (Src.limits m.src).memo_entries
+    && not (Hashtbl.mem m.memo i)
+  then limited m "memo entry";
+  Hashtbl.replace m.memo i value
 
 let to_pairs m items =
-  let rec loop = function
-    | k :: v :: rest -> (k, v) :: loop rest
-    | [] -> []
+  let rec loop acc = function
+    | k :: v :: rest -> loop ((k, v) :: acc) rest
+    | [] -> List.rev acc
     | [ _ ] -> err m "odd number of items for dict/setitems"
   in
-  loop items
+  loop [] items
+
+let extend m target items =
+  let rec reverse acc = function
+    | x :: rest ->
+        charge m 1;
+        reverse (x :: acc) rest
+    | [] -> List.rev_append acc items
+  in
+  target := reverse [] !target
+
+let decimal m s =
+  charge m (String.length s);
+  if String.length s > 0 then begin
+    let sign = if s.[0] = '-' || s.[0] = '+' then 1 else 0 in
+    if String.length s - sign > (Src.limits m.src).text_digits then
+      limited m "decimal digit"
+  end;
+  value_of_decimal ~charge:(charge m)
+    ~fail:(fun () -> err m "invalid decimal integer")
+    s
+
+let text_memo_id m s =
+  match int_of_string_opt s with
+  | Some key when key >= 0 -> key
+  | _ -> err m "invalid memo index"
 
 let expect_list m = function
   | List r -> r
@@ -297,10 +362,15 @@ let run_op m op =
   let c = Char.chr op in
   if c = Opcode.proto then begin
     let v = Src.uint1 s in
-    if v > 5 then err m "unsupported pickle protocol %d" v
+    if v > 5 then
+      Error.raise_at ~kind:Unsupported (Src.pos s)
+        "unsupported pickle protocol %d" v
   end
   else if c = Opcode.frame then ignore (Src.uint8 s)
-  else if c = Opcode.stop then raise Exit (* integers / bool / none *)
+  else if c = Opcode.stop then begin
+    ignore (top m);
+    raise Stop
+  end (* integers / bool / none *)
   else if c = Opcode.none then push m None
   else if c = Opcode.newtrue then push m (Bool true)
   else if c = Opcode.newfalse then push m (Bool false)
@@ -308,7 +378,7 @@ let run_op m op =
     begin match Src.line s with
     | "00" -> push m (Bool false)
     | "01" -> push m (Bool true)
-    | l -> push m (value_of_decimal l)
+    | l -> push m (decimal m l)
     end
   else if c = Opcode.long then begin
     let l = Src.line s in
@@ -317,34 +387,38 @@ let run_op m op =
         String.sub l 0 (String.length l - 1)
       else l
     in
-    push m (value_of_decimal l)
+    push m (decimal m l)
   end
   else if c = Opcode.binint then push m (Int (Int64.of_int (Src.int4 s)))
   else if c = Opcode.binint1 then push m (Int (Int64.of_int (Src.uint1 s)))
   else if c = Opcode.binint2 then push m (Int (Int64.of_int (Src.uint2 s)))
   else if c = Opcode.long1 then
-    push m (value_of_long_bytes (Src.take s (Src.uint1 s)))
+    push m (value_of_long_bytes (Src.payload s (Src.uint1 s)))
   else if c = Opcode.long4 then
-    push m (value_of_long_bytes (Src.take s (Src.uint4 s))) (* floats *)
-  else if c = Opcode.float then push m (Float (float_of_string (Src.line s)))
+    push m (value_of_long_bytes (Src.payload s (Src.uint4 s))) (* floats *)
+  else if c = Opcode.float then
+    begin match float_of_string_opt (Src.line s) with
+    | Some value -> push m (Float value)
+    | None -> err m "invalid floating-point number"
+    end
   else if c = Opcode.binfloat then push m (Float (Src.float8_be s)) (* bytes *)
-  else if c = Opcode.binbytes then push m (Bytes (Src.take s (Src.uint4 s)))
+  else if c = Opcode.binbytes then push m (Bytes (Src.payload s (Src.uint4 s)))
   else if c = Opcode.short_binbytes then
-    push m (Bytes (Src.take s (Src.uint1 s)))
-  else if c = Opcode.binbytes8 then push m (Bytes (Src.take s (Src.uint8 s)))
+    push m (Bytes (Src.payload s (Src.uint1 s)))
+  else if c = Opcode.binbytes8 then push m (Bytes (Src.payload s (Src.uint8 s)))
   else if c = Opcode.bytearray8 then
-    push m (Bytearray (Src.take s (Src.uint8 s))) (* strings (py2 str) *)
+    push m (Bytearray (Src.payload s (Src.uint8 s))) (* strings (py2 str) *)
   else if c = Opcode.string then
     push m (Str (latin1_to_utf8 (escape_decode (strip_quotes (Src.line s)))))
   else if c = Opcode.binstring then
-    push m (Str (latin1_to_utf8 (Src.take s (Src.uint4 s))))
+    push m (Str (latin1_to_utf8 (Src.payload s (Src.uint4 s))))
   else if c = Opcode.short_binstring then
-    push m (Str (latin1_to_utf8 (Src.take s (Src.uint1 s)))) (* unicode *)
+    push m (Str (latin1_to_utf8 (Src.payload s (Src.uint1 s)))) (* unicode *)
   else if c = Opcode.unicode then push m (Str (raw_unicode_escape (Src.line s)))
   else if c = Opcode.short_binunicode then
-    push m (Str (Src.take s (Src.uint1 s)))
-  else if c = Opcode.binunicode then push m (Str (Src.take s (Src.uint4 s)))
-  else if c = Opcode.binunicode8 then push m (Str (Src.take s (Src.uint8 s)))
+    push m (Str (Src.payload s (Src.uint1 s)))
+  else if c = Opcode.binunicode then push m (Str (Src.payload s (Src.uint4 s)))
+  else if c = Opcode.binunicode8 then push m (Str (Src.payload s (Src.uint8 s)))
     (* buffers (proto 5, out-of-band) *)
   else if c = Opcode.next_buffer then
     err m "NEXT_BUFFER: out-of-band buffers are not supported"
@@ -356,12 +430,12 @@ let run_op m op =
   else if c = Opcode.append then begin
     let x = pop m in
     let r = expect_list m (top m) in
-    r := !r @ [ x ]
+    extend m r [ x ]
   end
   else if c = Opcode.appends then begin
     let items = pop_mark m in
     let r = expect_list m (top m) in
-    r := !r @ items
+    extend m r items
   end (* tuples *)
   else if c = Opcode.empty_tuple then push m (Tuple [||])
   else if c = Opcode.tuple then push m (Tuple (Array.of_list (pop_mark m)))
@@ -383,29 +457,30 @@ let run_op m op =
     let v = pop m in
     let k = pop m in
     let r = expect_dict m (top m) in
-    r := !r @ [ (k, v) ]
+    extend m r [ (k, v) ]
   end
   else if c = Opcode.setitems then begin
     let pairs = to_pairs m (pop_mark m) in
     let r = expect_dict m (top m) in
-    r := !r @ pairs
+    extend m r pairs
   end (* sets *)
   else if c = Opcode.empty_set then push m (Set (ref []))
   else if c = Opcode.additems then begin
     let items = pop_mark m in
     let r = expect_set m (top m) in
-    r := !r @ items
+    extend m r items
   end
   else if c = Opcode.frozenset then push m (Frozenset (pop_mark m))
     (* stack ops *)
-  else if c = Opcode.pop then ignore (pop m)
+  else if c = Opcode.pop then
+    match m.stack with [] -> drop_mark m | _ -> ignore (pop m)
   else if c = Opcode.dup then push m (top m)
   else if c = Opcode.mark then mark m
-  else if c = Opcode.pop_mark then ignore (pop_mark m) (* memo *)
-  else if c = Opcode.get then push m (memo_get m (int_of_string (Src.line s)))
+  else if c = Opcode.pop_mark then drop_mark m (* memo *)
+  else if c = Opcode.get then push m (memo_get m (text_memo_id m (Src.line s)))
   else if c = Opcode.binget then push m (memo_get m (Src.uint1 s))
   else if c = Opcode.long_binget then push m (memo_get m (Src.uint4 s))
-  else if c = Opcode.put then memo_put m (int_of_string (Src.line s))
+  else if c = Opcode.put then memo_put m (text_memo_id m (Src.line s))
   else if c = Opcode.binput then memo_put m (Src.uint1 s)
   else if c = Opcode.long_binput then memo_put m (Src.uint4 s)
   else if c = Opcode.memoize then memo_put m (Hashtbl.length m.memo)
@@ -481,10 +556,32 @@ let run_op m op =
 
 (* Decode a single pickle from [src]. *)
 let run src =
-  let m = { src; stack = []; metastack = []; memo = Hashtbl.create 64 } in
+  let limits = Src.limits src in
+  let m =
+    {
+      src;
+      stack = [];
+      stack_len = 0;
+      live_items = 0;
+      metastack = [];
+      marks = 0;
+      opcodes = limits.opcodes;
+      work = limits.work;
+      memo = Hashtbl.create 64;
+    }
+  in
   let rec loop () =
-    match run_op m (Src.byte src) with
+    let opcode_pos = Src.pos src in
+    match
+      try
+        if m.opcodes = 0 then limited m "opcode";
+        m.opcodes <- m.opcodes - 1;
+        charge m 1;
+        run_op m (Src.byte src)
+      with Error.E error ->
+        raise (Error.E { error with opcode_pos = Some opcode_pos })
+    with
     | () -> loop ()
-    | exception Exit -> top m (* STOP *)
+    | exception Stop -> top m
   in
   loop ()
