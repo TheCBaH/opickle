@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install 32-bit compiler prerequisites
         if: matrix.suite == 'native32'
-        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib
+        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib g++-multilib
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ matrix.ocaml }}
@@ -65,7 +65,7 @@ jobs:
         if: matrix.suite == 'tests'
         run: |
           opam install --yes ocamlformat.0.29.0 js_of_ocaml-compiler
-          (cd "$SOURCE_DIR" && opam exec -- dune build @fmt @runtest-js)
+          opam exec -- dune build --root "$SOURCE_DIR" @opam @fmt @runtest-js
           cmp opickle.opam "$SOURCE_DIR/opickle.opam"
       - name: Record toolchain
         if: always()
@@ -77,5 +77,4 @@ jobs:
         run: python3 --version
       - name: Record Node runtime
         if: always() && matrix.suite == 'tests'
-        run: |
-          node --version
+        run: node --version
