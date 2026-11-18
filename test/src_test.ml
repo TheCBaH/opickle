@@ -7,12 +7,12 @@ let of_test_string ?(slice_length = 1) s =
 
 let%expect_test "byte and position tracking" =
   let t = of_test_string "ABC" in
-  Printf.printf "pos=%d " (Src.pos t);
+  Printf.printf "pos=%Ld " (Src.pos t);
   let a = Src.byte t in
   let b = Src.byte t in
   let c = Src.byte t in
   Printf.printf "%c%c%c " (Char.chr a) (Char.chr b) (Char.chr c);
-  Printf.printf "pos=%d" (Src.pos t);
+  Printf.printf "pos=%Ld" (Src.pos t);
   [%expect "pos=0 ABC pos=3"]
 
 let%expect_test "byte past end raises" =
@@ -40,13 +40,20 @@ let%expect_test "fixed-width numeric readers" =
   (* uint2 0x0102 LE = 513; int4 of 0xFFFFFFFF = -1; uint4 of same = 2^32-1. *)
   Printf.printf "uint2=%d\n" (Src.uint2 (of_test_string "\x01\x02"));
   Printf.printf "int4=%d\n" (Src.int4 (of_test_string "\xff\xff\xff\xff"));
-  Printf.printf "uint4=%d\n" (Src.uint4 (of_test_string "\xff\xff\xff\xff"));
+  (match Int32.unsigned_to_int (-1l) with
+  | Some expected ->
+      assert (Src.uint4 (of_test_string "\xff\xff\xff\xff") = expected)
+  | None -> (
+      match Src.uint4 (of_test_string "\xff\xff\xff\xff") with
+      | exception Error.E _ -> ()
+      | _ -> assert false));
+  print_endline "uint4 checked";
   Printf.printf "uint8=%d\n"
     (Src.uint8 (of_test_string "\x05\x00\x00\x00\x00\x00\x00\x00"));
   [%expect {|
     uint2=513
     int4=-1
-    uint4=4294967295
+    uint4 checked
     uint8=5 |}]
 
 let%expect_test "float8_be round-trips a double" =

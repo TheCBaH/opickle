@@ -6,6 +6,7 @@
 
 module Value = Value
 module Error = Error
+module Limits = Limits
 
 (* [Src] and [Unpickler] are internal building blocks, re-exported so they can
    be unit-tested in isolation and reused for advanced streaming. *)
@@ -13,17 +14,35 @@ module Src = Src
 module Unpickler = Unpickler
 open Bytesrw
 
-let of_reader_exn reader = Unpickler.run (Src.of_reader reader)
+type legacy_strings = Unpickler.legacy_strings = Latin1 | Raw_bytes
 
-let of_reader reader =
-  try Ok (of_reader_exn reader) with Error.E e -> Result.Error e
+let of_reader_exn ?limits ?legacy_strings ?check_frames reader =
+  Unpickler.run ?legacy_strings (Src.of_reader ?limits ?check_frames reader)
 
-let of_string_exn s = of_reader_exn (Bytes.Reader.of_string s)
-let of_string s = of_reader (Bytes.Reader.of_string s)
-let of_in_channel_exn ic = of_reader_exn (Bytes.Reader.of_in_channel ic)
-let of_in_channel ic = of_reader (Bytes.Reader.of_in_channel ic)
+let of_reader ?limits ?legacy_strings ?check_frames reader =
+  try Ok (of_reader_exn ?limits ?legacy_strings ?check_frames reader)
+  with Error.E e -> Result.Error e
 
-let of_file_exn path =
-  In_channel.with_open_bin path (fun ic -> of_in_channel_exn ic)
+let of_string_exn ?limits ?legacy_strings ?check_frames s =
+  of_reader_exn ?limits ?legacy_strings ?check_frames (Bytes.Reader.of_string s)
 
-let of_file path = try Ok (of_file_exn path) with Error.E e -> Result.Error e
+let of_string ?limits ?legacy_strings ?check_frames s =
+  of_reader ?limits ?legacy_strings ?check_frames (Bytes.Reader.of_string s)
+
+let of_in_channel_exn ?limits ?legacy_strings ?check_frames ic =
+  of_reader_exn ?limits ?legacy_strings ?check_frames
+    (Bytes.Reader.of_in_channel ic)
+
+let of_in_channel ?limits ?legacy_strings ?check_frames ic =
+  of_reader ?limits ?legacy_strings ?check_frames
+    (Bytes.Reader.of_in_channel ic)
+
+let of_file_exn ?limits ?legacy_strings ?check_frames path =
+  try
+    In_channel.with_open_bin path
+      (of_in_channel_exn ?limits ?legacy_strings ?check_frames)
+  with Sys_error msg -> Error.raise_at ~kind:Input 0L "%s" msg
+
+let of_file ?limits ?legacy_strings ?check_frames path =
+  try Ok (of_file_exn ?limits ?legacy_strings ?check_frames path)
+  with Error.E e -> Result.Error e
