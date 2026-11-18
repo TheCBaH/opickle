@@ -4,7 +4,7 @@
    over the fixture pickles. *)
 
 let dump_file path =
-  match Opickle.of_file path with
+  match Opickle.of_file ~limits:Opickle.Limits.bounded path with
   | Ok v ->
       print_endline (Opickle.Value.to_string v);
       true

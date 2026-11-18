@@ -18,9 +18,9 @@ Mixed values written by Python 3 at all supported protocol versions.
   <reduce <global __builtin__.bytearray>
   (<reduce <global _codecs.encode> ('\x00ÿ', 'latin1')>,)>,
   'objects':
-  (<object <reduce <global copy_reg._reconstructor>
-           (<global __main__.Sample>, <global __builtin__.object>, None)>
-   () state={'level': 3, 'name': 'sample'}>,
+  (<reduce <global copy_reg._reconstructor>
+   (<global __main__.Sample>, <global __builtin__.object>, None)
+   state={'level': 3, 'name': 'sample'}>,
   <reduce <global copy_reg._reconstructor>
   (<global __main__.Point>, <global __builtin__.tuple>, ('A', 4))>,
   <reduce <global __main__.Direction> (1,)>)}
@@ -34,9 +34,9 @@ Mixed values written by Python 3 at all supported protocol versions.
   <reduce <global __builtin__.bytearray>
   (<reduce <global _codecs.encode> ('\x00ÿ', 'latin1')>,)>,
   'objects':
-  (<object <reduce <global copy_reg._reconstructor>
-           (<global __main__.Sample>, <global __builtin__.object>, None)>
-   () state={'level': 3, 'name': 'sample'}>,
+  (<reduce <global copy_reg._reconstructor>
+   (<global __main__.Sample>, <global __builtin__.object>, None)
+   state={'level': 3, 'name': 'sample'}>,
   <reduce <global copy_reg._reconstructor>
   (<global __main__.Point>, <global __builtin__.tuple>, ('A', 4))>,
   <reduce <global __main__.Direction> (1,)>)}
