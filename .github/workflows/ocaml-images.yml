@@ -3,12 +3,18 @@ name: OCaml Images
 on:
   push:
     branches:
-      - '**'
+      - main
+      - devel
+    paths:
+      - '.devcontainer/**'
+      - '.github/workflows/ocaml-images.yml'
+  workflow_dispatch:
 
 jobs:
   devcontainer:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     steps:
     - name: checkout

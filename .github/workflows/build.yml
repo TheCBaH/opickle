@@ -2,46 +2,80 @@ name: build
 
 on:
   push:
+    branches: [main, devel]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository ||
+      (github.head_ref != 'main' && github.head_ref != 'devel')
+    name: OCaml ${{ matrix.ocaml }} (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {ocaml: '4.14.x', suite: install}
+          - {ocaml: '4.14.x', suite: tests}
+          - {ocaml: '5.x', suite: tests}
+          - {ocaml: 'ocaml-variants.4.14.4+options,ocaml-option-32bit', suite: native32}
     steps:
-    - name: git cache
-      uses: actions/cache@v6
-      with:
-        path: .git
-        key: git-${{ runner.os }}-${{ github.ref_name }}
-        restore-keys: |
-          git-${{ runner.os }}-
-    - name: checkout
-      uses: actions/checkout@v7
-      with:
-        submodules: recursive
-    - name: devcontainer
-      uses: TheCBaH/devcontainer-action/devcontainer@v1
-      id: devcontainer
-    - name: setup
-      run: |
-        echo 'EXEC=${{ steps.devcontainer.outputs.exec }}' >> $GITHUB_ENV
-    - name: build
-      run: |
-        ${{ env.EXEC }} make build BUILD_OPTIONS="--display short"
-    - name: test
-      run: |
-        ${{ env.EXEC }} make runtest
-    - name: format
-      run: |
-        ${{ env.EXEC }} make format
-    - name: verify pristine
-      run: |
-        ${{ env.EXEC }} bash -c '
-          git_status=$(git status --porcelain)
-          if [ -n "$git_status" ]; then
-            echo "Git directory is not pristine. Modified or created files:"
-            echo "$git_status"
-            exit 1
-          fi
-        '
+      - uses: actions/checkout@v7
+      - name: Install 32-bit compiler prerequisites
+        if: matrix.suite == 'native32'
+        run: sudo apt-get update && sudo apt-get install --yes gcc-multilib
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml }}
+          opam-pin: false
+          cache: false
+      - uses: actions/setup-python@v6
+        if: matrix.suite != 'install'
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        if: matrix.suite == 'tests'
+        with:
+          node-version: '22'
+      - name: Extract standalone source archive
+        run: |
+          source_dir=$(mktemp -d)
+          git archive HEAD | tar -x -C "$source_dir"
+          test ! -e "$source_dir/.gitmodules"
+          echo "SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+      - name: Install from the archive
+        if: matrix.suite == 'install'
+        run: opam install --yes "$SOURCE_DIR"
+      - name: Check 31-bit native runtime
+        if: matrix.suite == 'native32'
+        run: test "$(opam exec -- ocamlc -config-var int_size)" = 31
+      - name: Install with native tests
+        if: matrix.suite != 'install'
+        run: opam install --yes --with-test "$SOURCE_DIR"
+      - name: Exercise installed library and CLI
+        run: bash "$SOURCE_DIR/ci/check-install.sh"
+      - name: Check formatting and run JavaScript tests
+        if: matrix.suite == 'tests'
+        run: |
+          opam install --yes ocamlformat.0.29.0 js_of_ocaml-compiler
+          (cd "$SOURCE_DIR" && opam exec -- dune build @fmt @runtest-js)
+          cmp opickle.opam "$SOURCE_DIR/opickle.opam"
+      - name: Record toolchain
+        if: always()
+        run: |
+          opam exec -- ocamlc -config
+          opam list --installed --columns=name,version
+      - name: Record test runtimes
+        if: always() && matrix.suite != 'install'
+        run: python3 --version
+      - name: Record Node runtime
+        if: always() && matrix.suite == 'tests'
+        run: |
+          node --version

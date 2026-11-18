@@ -18,4 +18,6 @@
    (>= 4.14))
   dune
   bytesrw
-  cmdliner))
+  cmdliner
+  (ppx_expect :with-test)
+  (conf-python-3 :with-test)))

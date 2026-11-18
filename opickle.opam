@@ -13,6 +13,8 @@ depends: [
   "dune" {>= "3.7"}
   "bytesrw"
   "cmdliner"
+  "ppx_expect" {with-test}
+  "conf-python-3" {with-test}
   "odoc" {with-doc}
 ]
 build: [
