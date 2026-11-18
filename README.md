@@ -1,86 +1,95 @@
 # opickle
 
-A Python [pickle](https://docs.python.org/3/library/pickle.html) parser for OCaml.
+`opickle` reads Python pickle protocols 0–5 into an OCaml graph. It uses
+[bytesrw](https://erratique.ch/software/bytesrw) to read from byte strings,
+channels, files and filters. Python calls and names remain symbolic. Protocol 5
+supports in-band buffers, including bytearrays. External buffers require a
+provider API and currently return `Error.Unsupported`.
 
-`opickle` decodes a pickle byte stream into an OCaml value tree. It implements
-the pickle stack machine for **all protocol versions, 0 through 5**, and reads
-its input through [bytesrw](https://erratique.ch/software/bytesrw), so any source
-that library can wrap (strings, channels, files, filters) can be unpickled.
+The wire reference is [CPython's pickle implementation at f871449](https://github.com/python/cpython/tree/f8714494a9d54910b5142e0b3fe6eb5875e8c09d/Lib)
+and the accompanying [C implementation](https://github.com/python/cpython/blob/f8714494a9d54910b5142e0b3fe6eb5875e8c09d/Modules/_pickle.c).
 
-The opcode set and per-opcode semantics follow CPython's reference
-implementation (`Lib/pickle.py`, `Lib/pickletools.py`, `Modules/_pickle.c`).
-
-## Status
-
-Read/parse only — this is not a pickler (no serialization). Opcodes that would
-require running Python to fully realize a value (`GLOBAL`, `REDUCE`, `NEWOBJ`,
-`BUILD`, `INST`, persistent ids, extension codes) are **kept structurally**
-rather than executed, so the caller can interpret them as needed.
-
-## Usage
-
-### Library
+## Reading a pickle
 
 ```ocaml
-match Opickle.of_file "data.pickle" with
-| Ok v -> print_endline (Opickle.Value.to_string v)
-| Error e -> prerr_endline (Opickle.Error.to_string e)
+match Opickle.of_file ~limits:Opickle.Limits.bounded ~exact:true "data.pickle" with
+| Ok value -> print_endline (Opickle.Value.to_string value)
+| Error error -> prerr_endline (Opickle.Error.to_string error)
 ```
 
-Entry points (each has an `_exn` variant that raises `Opickle.Error.E`):
+Use `of_string`, `of_reader`, `of_in_channel` or `of_file` and their
+exception-raising variants. By default each call reads one pickle prefix and
+checks frame boundaries. `~exact:true` requires a single stack result at
+`STOP`, no open marks and no trailing bytes. `~check_frames:false` accepts
+legacy streams whose frame lengths should be ignored. Errors report a kind,
+the detection cursor and, where relevant, the opcode's starting byte offset.
+Reader coordinates begin at the supplied reader's current position. File and
+bytesrw stream failures are reported as input errors. Unrelated exceptions
+raised by caller-supplied readers propagate.
+
+A successful prefix read leaves a caller-owned `Bytes.Reader.t` at the end
+of the pickle, even when the reader supplied a slice containing more bytes.
+For repeated channel loads or persistent memo state, use `Session`.
 
 ```ocaml
-val of_reader     : Bytesrw.Bytes.Reader.t -> (Value.t, Error.t) result
-val of_string     : string -> (Value.t, Error.t) result
-val of_in_channel : in_channel -> (Value.t, Error.t) result
-val of_file       : string -> (Value.t, Error.t) result
+let session =
+  Opickle.Session.of_reader ~memo:Opickle.Session.Shared
+    ~limits:Opickle.Limits.bounded reader
+in
+match Opickle.Session.load session with
+| Ok (Some value) -> print_endline (Opickle.Value.to_string value)
+| Ok None -> ()
+| Error error -> prerr_endline (Opickle.Error.to_string error)
 ```
 
-### CLI
+The default session resets its memo for each pickle. Shared sessions preserve
+aliases across loads and can update previously returned nodes. A failed load
+ends the session. When decoding data from an untrusted source, use explicit
+limits sized for the application. Decode limits and printer limits are separate.
 
-`pickle_dump` decodes one or more pickle files and prints the rendered values:
+## Inspecting values
 
-```console
-$ pickle_dump data.pickle
-{None: None, 1000: 100000, 'string': 'string', (1, 2): (1, 2, 3), ...}
+`Value.view` exposes scalars, containers, and symbolic constructors. Nodes
+may be shared or cyclic. Use `Value.same_node` to test identity or
+`Value.id` to track visited nodes. A container view snapshots its immediate
+entries. Dict entries retain duplicates in insertion order, and
+`Value.dict_find` finds the last matching string key.
+
+`Value.Object` retains the constructor family and its ordered operations,
+including arguments, keyword arguments where present, appends, item assignments
+and `BUILD`. A call whose result is discarded by the pickle program is absent
+from the returned graph. Python-level side effects, including custom state
+setters, require interpretation beyond the graph. The decoder never imports or
+executes them.
+
+Legacy Python 2 string opcodes preserve bytes with
+`~legacy_strings:Raw_bytes`. The default converts their Latin-1 bytes to
+unicode. Unicode pickle opcodes validate UTF-8 and preserve lone surrogates.
+Extension codes are positive `int32` values. Big integer magnitudes are
+canonical unsigned little-endian bytes.
+
+`pickle_dump file.pickle` prints a bounded diagnostic rendering. It includes
+cycle markers and escapes non-printable bytes and control characters. The
+rendering is intended for inspection. It follows Python syntax for common
+scalars and containers.
+
+## Building and testing
+
+Use the devcontainer or install the package's opam dependencies. The library
+uses `bytesrw`, the CLI uses `cmdliner` and the test suite uses `ppx_expect`
+and Python 3. The explicit JavaScript suite also requires Node and
+`js_of_ocaml-compiler`. Formatting uses ocamlformat 0.29.0.
+
+```sh
+make build
+make runtest
+opam exec -- dune build @runtest-js
+make format
 ```
 
-## Value model
-
-`Opickle.Value.t` covers the builtin Python types reachable through pickle:
-`None`, `Bool`, `Int` (`int64`), `Bigint` (arbitrary precision, no external
-dependency), `Float`, `Bytes`, `Bytearray`, `Str` (UTF-8), `List`, `Tuple`,
-`Dict`, `Set`, `Frozenset`, plus the structural nodes `Global`, `Reduce`,
-`Object`, `Persistent` and `Ext`.
-
-Containers are mutable, so self-referential pickles (the memo points a container
-at itself) decode correctly; the pretty-printer renders cycles as `[...]` /
-`{...}` the way Python's `repr` does.
-
-## Building
-
-The project builds with [dune](https://dune.build/) and depends on `bytesrw` and
-`cmdliner`. A devcontainer with the full toolchain is provided under
-`.devcontainer/`.
-
-```console
-make build      # dune build
-make runtest    # dune runtest (inline expect tests + cram smoke tests)
-make promote    # update expect/cram snapshots in place
-make format     # dune fmt
-```
-
-## Tests
-
-`test/` holds one [`ppx_expect`](https://github.com/janestreet/ppx_expect) file
-per library module (`src_test.ml`, `value_test.ml`, …) exercising each in
-isolation, plus a [cram](https://dune.readthedocs.io/en/stable/tests.html#cram-tests)
-test (`dump.t`) that runs `pickle_dump` over a set of fixture pickles (generated
-by CPython for protocols 0–5, including Python 2 pickles, recursive structures,
-and an unresolvable global) and snapshots the output.
-
-The fixtures live in the `serde-pickle` submodule (`modules/serde-pickle`), used
-only as a source of test data. The `cpython` submodule is the format reference.
+The tests run from a source archive and cover structural values, decoder
+errors, CPython-generated input, and slice boundaries. See the
+[fixture inventory](test/fixtures.md) and [changes](CHANGES.md).
 
 ## License
 

@@ -1,43 +1,22 @@
 # CLAUDE.md
 
-`opickle` is an OCaml library that parses the Python pickle format (protocols
-0–5) into a value tree, reading input through `bytesrw`. Parser only — no
-serialization.
+`opickle` is a read-only OCaml structural parser for Python pickle 0–5.
+It reads through `bytesrw` and preserves graph identity. Python callables and
+constructors remain data.
 
 ## Commands
 
-Everything runs through `opam exec` via the Makefile: `make build`,
-`make runtest`, `make promote` (update expect/cram snapshots), `make format`.
-CI runs build + runtest + format, then fails if `git status` is not pristine —
-so keep snapshots promoted and run `make format` before finishing.
+The Makefile runs `make build`, `make runtest`, `make promote` and
+`make format` with opam. Use `opam exec -- dune build @runtest-js` for
+JavaScript tests. Fixtures and tests run from a standalone source archive.
 
 ## Layout
 
-- `lib/` — the `opickle` library: `opcode.ml` (opcode bytes), `src.ml` (buffered
-  byte source over `Bytesrw.Bytes.Reader`), `value.ml` (value model + `pp`),
-  `error.ml`, `unpickler.ml` (the stack machine over all 68 opcodes + Python
-  string codecs), `opickle.ml` (public `of_*` facade; re-exports `Src`/
-  `Unpickler` for testing).
-- `bin/pickle_dump.ml` — CLI used by the cram tests.
-- `test/` — `*_test.ml` inline `ppx_expect` tests (one per lib module) plus
-  `dump.t`, a cram smoke test running `pickle_dump` over the fixtures.
-- `modules/` — submodules: `cpython` is **the** format reference; `serde-pickle`
-  supplies fixture pickles only (`test/data/*.pickle`) — do not read its source.
+- `lib/` contains the byte source, opcode interpreter, graph and documented
+  public API in `opickle.mli`.
+- `bin/pickle_dump.ml` provides a bounded diagnostic CLI.
+- `test/` contains inline tests, cram tests and CPython-generated conformance
+  fixtures. See [test/fixtures.md](test/fixtures.md).
 
-## Conventions
-
-- **No `Obj`.** Cycle detection in `value.ml` uses physical equality (`==`).
-- `Value.pp` uses `Format` boxes; long structures wrap at the margin.
-- Reconstruction opcodes (`Global`/`Reduce`/`Object`/`Persistent`/`Ext`) are
-  surfaced structurally, never executed.
-- Big integers use `Value.Bigint` (sign + LE magnitude), no `zarith`.
-- CPython is the source of truth for opcode behavior (`Lib/pickle.py` is the
-  readable reference).
-- Expect tests live in `test/`, not in `lib/`. Single-line expectations use a
-  plain string (`[%expect "..."]`); multi-line use `{| ... |}`.
-
-## Gotcha
-
-OCaml lexes string/char literals **inside comments** — a stray `"` or `'` (e.g.
-an apostrophe) breaks the build with "Comment not terminated". Keep comment
-punctuation balanced.
+Use [the pinned CPython source](https://github.com/python/cpython/blob/f8714494a9d54910b5142e0b3fe6eb5875e8c09d/Lib/pickle.py)
+as the reference and keep Python reconstruction symbolic.

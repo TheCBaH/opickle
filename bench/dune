@@ -1,0 +1,5 @@
+(executable
+ (name scaling)
+ (enabled_if
+  (= %{profile} bench))
+ (libraries opickle bytesrw))
