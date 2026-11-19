@@ -40,7 +40,7 @@ jobs:
         if: matrix.suite != 'install'
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: matrix.suite == 'tests'
         with:
           node-version: '22'
