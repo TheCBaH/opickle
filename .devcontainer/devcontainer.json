@@ -13,7 +13,8 @@
             "upgradePackages": "false"
         },
         "ghcr.io/thecbah/ocaml-features/ocaml:1": {
-            "packages": "ocamlformat#0.29.0 js_of_ocaml-compiler utop"
+            "packages": "ocamlformat#0.29.0 js_of_ocaml-compiler utop",
+            "ocaml-version-overrides": "dune#3.24.2@5.4.*"
         }
     },
     "customizations": {
