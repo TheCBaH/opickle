@@ -36,7 +36,7 @@ jobs:
           ocaml-compiler: ${{ matrix.ocaml }}
           opam-pin: false
           cache: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: matrix.suite != 'install'
         with:
           python-version: '3.13'
