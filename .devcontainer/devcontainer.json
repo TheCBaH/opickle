@@ -27,6 +27,6 @@
         }
     },
     "remoteUser": "vscode",
-    "postCreateCommand": "sudo chown -R \"$(id -u):$(id -g)\" \"${OPAMROOT}/log\" && opam install . --deps-only --with-test --yes",
+    "postCreateCommand": "sudo chown -R \"$(id -u):$(id -g)\" \"$OPAMROOT\" && opam install . --deps-only --with-test --yes",
     "waitFor": "postCreateCommand"
 }
