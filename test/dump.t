@@ -84,14 +84,16 @@ Mixed values written by Python 3 at all supported protocol versions.
   <reduce <global __main__.Direction> (1,)>)}
 
 Python 2 text and binary string forms, including Latin-1 bytes and Unicode.
+Normalize line breaks for this case because Format's Unicode width varies
+between supported compiler versions.
 
-  $ pickle_dump legacy_0.pickle legacy_1.pickle legacy_2.pickle
-  ['café', 'café',
-  <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
-  ['café', 'café', 'wide',
-  <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
-  ['café', 'café', 'wide',
-  <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
+  $ for protocol in 0 1 2; do
+  >   rendered=$(pickle_dump "legacy_$protocol.pickle") || exit $?
+  >   printf '%s\n' "$(printf '%s' "$rendered" | tr '\n' ' ')"
+  > done
+  ['café', 'café', <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
+  ['café', 'café', 'wide', <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
+  ['café', 'café', 'wide', <reduce <global __builtin__.bytearray> ('Bÿ', 'latin-1')>]
 
 A recursive list reached through an immutable tuple at all protocol versions.
 
