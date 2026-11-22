@@ -1,4 +1,5 @@
 (library
  (name opickle)
  (public_name opickle)
- (libraries bytesrw))
+ (libraries bytesrw)
+ (private_modules error limits opcode src unpickler value))

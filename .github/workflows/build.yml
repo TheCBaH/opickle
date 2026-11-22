@@ -61,6 +61,11 @@ jobs:
         run: opam install --yes --with-test "$SOURCE_DIR"
       - name: Exercise installed library and CLI
         run: bash "$SOURCE_DIR/ci/check-install.sh"
+      - name: Check installed module namespace
+        run: >-
+          opam exec -- sh "$SOURCE_DIR/ci/namespace-check.sh" --fail --prefix Opickle
+          --expect-libs "$SOURCE_DIR/ci/namespace.expect"
+          "install=$(opam var lib)/opickle"
       - name: Check formatting and run JavaScript tests
         if: matrix.suite == 'tests'
         run: |
